@@ -1,0 +1,6 @@
+{
+  "name": "Shifa SDG Innovation Challenge Kerala 2026",
+  "description": "A modern, interactive landing page for Shifa SDG Innovation Challenge Kerala 2026, a Kerala-wide student innovation platform focused on sustainability, entrepreneurship, and social impact.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
