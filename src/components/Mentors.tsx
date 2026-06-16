@@ -1,5 +1,6 @@
 import { Linkedin, Cpu, ShieldAlert, Sparkles, Terminal } from 'lucide-react';
 import { MENTORS } from '../data';
+import kahabGraphic from '../../kahab.svg';
 
 export default function Mentors() {
   const getDoodleAvatar = (role: string) => {
@@ -62,6 +63,14 @@ export default function Mentors() {
             Experts from academia, industry, startups, and social innovation sectors support teams with idea refinement, validation, and pitch preparation.
           </p>
         </div>
+
+        {/* Expert Clinics visual */}
+        <img
+          src={kahabGraphic}
+          alt="Expert clinics programme graphic"
+          className="mx-auto block w-full max-w-5xl h-auto object-contain"
+          loading="lazy"
+        />
 
         {/* Mentors Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">

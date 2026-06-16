@@ -2,6 +2,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import { User as FirebaseUser } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
 import { ArrowLeft, ArrowUpDown, BarChart3, CheckCircle2, ClipboardCheck, ExternalLink, FileText, Gavel, Loader2, Lock, Save, Search, Star } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { db } from '../lib/firebase';
 import { IdeaSubmission, TeamMember } from '../types';
 
@@ -237,6 +238,11 @@ export default function JudgeReviewPanel({ user, onBack, onLogin }: JudgeReviewP
       });
   }, [assignments, scoreByAssignmentId, search, sortBy, statusFilter]);
 
+  const displayedAssignments = useMemo(() => {
+    if (activeTab !== 'completed') return visibleAssignments;
+    return visibleAssignments.filter(assignment => assignment.status === 'completed' || Boolean(scoreByAssignmentId[assignment.id]));
+  }, [activeTab, scoreByAssignmentId, visibleAssignments]);
+
   const completedAssignments = useMemo(() => {
     return assignments.filter(assignment => assignment.status === 'completed' || Boolean(scoreByAssignmentId[assignment.id]));
   }, [assignments, scoreByAssignmentId]);
@@ -343,8 +349,24 @@ export default function JudgeReviewPanel({ user, onBack, onLogin }: JudgeReviewP
   return (
     <main className="min-h-screen bg-slate-50 px-4 pb-16 pt-28 text-slate-950 md:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
-        {toast && <div className="fixed right-4 top-24 z-50 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 shadow-lg">{toast}</div>}
-        <header className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+        <AnimatePresence>
+          {toast && (
+            <motion.div
+              initial={{ opacity: 0, y: -12, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -12, scale: 0.98 }}
+              className="fixed right-4 top-24 z-50 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 shadow-lg"
+            >
+              {toast}
+            </motion.div>
+          )}
+        </AnimatePresence>
+        <motion.header
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.28, ease: 'easeOut' }}
+          className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between"
+        >
           <div>
             <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm">
               <Gavel className="h-4 w-4" /> Judge Review Panel
@@ -355,15 +377,20 @@ export default function JudgeReviewPanel({ user, onBack, onLogin }: JudgeReviewP
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
-            <JudgeStat label="Assigned" value={assignments.length} />
-            <JudgeStat label="Completed" value={completedAssignments.length} />
-            <JudgeStat label="Pending" value={pendingAssignments.length} />
+            <JudgeStat label="Assigned" value={assignments.length} index={0} />
+            <JudgeStat label="Completed" value={completedAssignments.length} index={1} />
+            <JudgeStat label="Pending" value={pendingAssignments.length} index={2} />
           </div>
-        </header>
+        </motion.header>
 
         {error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{error}</div>}
 
-        <nav className="flex gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm">
+        <motion.nav
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.08, duration: 0.24 }}
+          className="flex gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm"
+        >
           {([
             { id: 'overview', label: 'Overview', icon: <BarChart3 className="h-4 w-4" /> },
             { id: 'assigned', label: 'Assigned Ideas', icon: <ClipboardCheck className="h-4 w-4" /> },
@@ -377,14 +404,15 @@ export default function JudgeReviewPanel({ user, onBack, onLogin }: JudgeReviewP
                 if (item.id === 'completed') setStatusFilter('completed');
                 if (item.id === 'assigned') setStatusFilter('all');
               }}
-              className={`inline-flex min-h-10 flex-none items-center gap-2 rounded-xl px-3 text-xs font-semibold transition ${
-                activeTab === item.id ? 'bg-slate-950 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+              className={`relative inline-flex min-h-10 flex-none items-center gap-2 overflow-hidden rounded-xl px-3 text-xs font-semibold transition ${
+                activeTab === item.id ? 'text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
               }`}
             >
-              {item.icon} {item.label}
+              {activeTab === item.id && <motion.span layoutId="judge-tab-pill" className="absolute inset-0 rounded-xl bg-slate-950 shadow-sm" />}
+              <span className="relative z-10 inline-flex items-center gap-2">{item.icon} {item.label}</span>
             </button>
           ))}
-        </nav>
+        </motion.nav>
 
         {activeTab === 'overview' && (
           <section className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">

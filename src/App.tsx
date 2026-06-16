@@ -425,8 +425,8 @@ export default function App() {
     });
 
     setRegistrationDetail(registrationWithId);
-    playHandoffLoader('Preparing team dashboard');
-    navigateTo('dashboard');
+    playHandoffLoader('Preparing team banner');
+    navigateTo('badge');
     setShowSuccessToast(true);
 
     // Dismiss overlay success toast after 6 seconds
@@ -462,7 +462,7 @@ export default function App() {
                 <div className="space-y-1 min-w-0">
                   <h4 className="font-sans font-black text-lg tracking-tight">Team Registration Confirmed!</h4>
                   <p className="text-xs font-semibold leading-relaxed">
-                    Team <strong className="font-black">{registrationDetail.teamName}</strong> is registered. Your dashboard is ready.
+                    Team <strong className="font-black">{registrationDetail.teamName}</strong> is registered. Your QR banner is ready.
                   </p>
                 </div>
               </div>
@@ -470,7 +470,7 @@ export default function App() {
               {/* Action guide indicator */}
               <div className="bg-[#191A23] text-white text-[10px] p-2 rounded-xl flex items-center justify-between font-mono font-bold">
                 <span className="flex items-center gap-1">
-                  <Ticket className="w-3.5 h-3.5 text-[#B9FF66] fill-[#B9FF66]" /> TEAM DASHBOARD READY
+                  <Ticket className="w-3.5 h-3.5 text-[#B9FF66] fill-[#B9FF66]" /> TEAM BANNER READY
                 </span>
                 <span className="animate-pulse text-[#B9FF66] flex items-center gap-1.5 cursor-pointer" onClick={() => setShowSuccessToast(false)}>
                   Close <ArrowRight className="w-3 h-3" />

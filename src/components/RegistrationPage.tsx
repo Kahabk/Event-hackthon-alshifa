@@ -46,9 +46,10 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
     setFormData(prev => ({
       ...prev,
       leaderName: prev.leaderName || user?.displayName || '',
-      leaderEmail: prev.leaderEmail || user?.email || '',
+      leaderEmail: user?.email || '',
     }));
-  }, [user]);
+    setErrors({});
+  }, [user?.uid, user?.email, user?.displayName]);
 
   const visibleMembers = useMemo(() => formData.members.slice(0, Math.max(formData.teamSize - 1, 0)), [formData.members, formData.teamSize]);
 
@@ -222,11 +223,19 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
                   <input
                     type="email"
                     value={formData.leaderEmail}
-                    onChange={(event) => setFormData(prev => ({ ...prev, leaderEmail: event.target.value }))}
-                    className="w-full rounded-xl border-2 border-[#191A23] bg-[#F3F3F3] py-3 pl-11 pr-4 text-sm font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
+                    onChange={(event) => {
+                      if (!user) setFormData(prev => ({ ...prev, leaderEmail: event.target.value }));
+                    }}
+                    readOnly={Boolean(user)}
+                    className="w-full rounded-xl border-2 border-[#191A23] bg-[#F3F3F3] py-3 pl-11 pr-4 text-sm font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#B9FF66] read-only:cursor-not-allowed read-only:bg-[#E9EAEE] read-only:text-[#191A23]/70"
                     placeholder="leader@example.com"
                   />
                 </div>
+                {user && (
+                  <p className="mt-1 text-[10px] font-bold uppercase tracking-wide text-[#191A23]/55">
+                    Uses your current login email. Logout and login with another email to register another team.
+                  </p>
+                )}
               </Field>
             </div>
 
