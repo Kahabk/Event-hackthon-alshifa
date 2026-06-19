@@ -1,6 +1,9 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import { User as FirebaseUser } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 import { ArrowLeft, BookOpen, CheckCircle2, GraduationCap, Lock, Mail, MapPin, Phone, Send, User, Users } from 'lucide-react';
+import { db } from '../lib/firebase';
+import { defaultFormSettings, formSettingsCollection, formSettingsDocId, normalizeFormSettings } from '../lib/formSettings';
 import { Registration, TeamMember } from '../types';
 import FullScreenVideoLoader from './FullScreenVideoLoader';
 
@@ -24,6 +27,7 @@ const isEmail = (value: string) => /\S+@\S+\.\S+/.test(value);
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
 
 export default function RegistrationPage({ user, onAuthClick, onBack, onRegisterSuccess }: RegistrationPageProps) {
+  const [formSettings, setFormSettings] = useState(defaultFormSettings);
   const [formData, setFormData] = useState<Registration>({
     teamName: '',
     leaderName: user?.displayName || '',
@@ -43,6 +47,23 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    let active = true;
+
+    getDoc(doc(db, formSettingsCollection, formSettingsDocId))
+      .then(snapshot => {
+        if (!active || !snapshot.exists()) return;
+        setFormSettings(normalizeFormSettings(snapshot.data()));
+      })
+      .catch(() => {
+        if (active) setFormSettings(defaultFormSettings);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     setFormData(prev => ({
       ...prev,
       leaderName: prev.leaderName || user?.displayName || '',
@@ -50,6 +71,14 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
     }));
     setErrors({});
   }, [user?.uid, user?.email, user?.displayName]);
+
+  useEffect(() => {
+    setFormData(prev => ({
+      ...prev,
+      teamSize: formSettings.registration.teamSizes.includes(prev.teamSize) ? prev.teamSize : formSettings.registration.teamSizes[0] || 3,
+      experienceLevel: formSettings.registration.ideaStages.includes(prev.experienceLevel) ? prev.experienceLevel : formSettings.registration.ideaStages[0] || 'Idea',
+    }));
+  }, [formSettings.registration.ideaStages, formSettings.registration.teamSizes]);
 
   const visibleMembers = useMemo(() => formData.members.slice(0, Math.max(formData.teamSize - 1, 0)), [formData.members, formData.teamSize]);
 
@@ -140,7 +169,7 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
   };
 
   return (
-    <main className="min-h-screen bg-[#F7F8FA] pt-28 pb-16 px-4 md:px-8">
+    <main className="min-h-screen bg-[#FFF8E8] pt-28 pb-16 px-4 md:px-8">
       {submitting && <FullScreenVideoLoader label="Registering team" />}
       <div className="max-w-6xl mx-auto space-y-8">
         <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
@@ -149,28 +178,33 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
               <ArrowLeft className="w-4 h-4" /> Back to event
             </button>
             <div>
-              <span className="inline-flex items-center gap-2 rounded-md border-2 border-[#191A23] bg-[#B9FF66] px-3 py-1.5 text-xs font-black uppercase shadow-[2px_2px_0px_#191A23]">
-                Team Registration
+              <span className="inline-flex items-center gap-2 rounded-full bg-[#B9EDC8] px-3 py-1.5 text-xs font-black uppercase ring-1 ring-[#191A23]/10">
+                {formSettings.registration.eyebrow}
               </span>
-              <h1 className="mt-3 text-4xl md:text-6xl font-black tracking-tight text-[#191A23]">Register Your Team</h1>
+              <h1 className="mt-3 text-4xl md:text-6xl font-black tracking-tight text-[#191A23]">{formSettings.registration.title}</h1>
             </div>
           </div>
 
           {!user && (
-            <div className="max-w-md rounded-xl border-2 border-[#191A23] bg-white p-4 shadow-[4px_4px_0px_#191A23]">
+            <div className="max-w-md rounded-[24px] bg-[#CDB0E7] p-4 shadow-[0_18px_45px_rgba(25,26,35,0.12)] ring-1 ring-[#191A23]/10">
               <div className="flex items-start gap-3">
-                <Lock className="w-5 h-5 mt-0.5" />
+                <span className="flex h-11 w-11 flex-none items-center justify-center rounded-full border-2 border-[#191A23] bg-[#fffdf8]">
+                  <Lock className="w-5 h-5" />
+                </span>
                 <div className="space-y-3">
-                  <p className="text-sm font-bold leading-relaxed">Login first so your team registration can be saved and protected.</p>
-                  <button type="button" onClick={onAuthClick} className="neo-btn px-4 py-2 text-xs uppercase cursor-pointer">Open Login</button>
+                  <div>
+                    <p className="text-sm font-black leading-relaxed">Create or open your Shifa SDG account first.</p>
+                    <p className="mt-1 text-xs font-bold leading-relaxed text-[#191A23]/65">Your account protects the team record, QR banner, and pitch submission dashboard.</p>
+                  </div>
+                  <button type="button" onClick={onAuthClick} className="rounded-full border-2 border-[#191A23] bg-[#fffdf8] px-4 py-2 text-xs font-black shadow-[2px_2px_0px_#191A23] cursor-pointer">Open Account</button>
                 </div>
               </div>
             </div>
           )}
         </div>
 
-        <form onSubmit={handleSubmit} className="grid lg:grid-cols-[1.2fr_0.8fr] gap-6">
-          <section className="rounded-2xl border-2 border-[#191A23] bg-white p-5 md:p-7 shadow-[5px_5px_0px_#191A23] space-y-6">
+        <form onSubmit={handleSubmit} className="grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.75fr)]">
+          <section className="space-y-6 rounded-[28px] bg-white/90 p-4 shadow-[0_24px_80px_rgba(25,26,35,0.10)] ring-1 ring-[#191A23]/10 md:p-7">
             <div className="grid md:grid-cols-2 gap-4">
               <Field label="Team Name" error={errors.teamName}>
                 <div className="relative">
@@ -179,7 +213,7 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
                     type="text"
                     value={formData.teamName}
                     onChange={(event) => setFormData(prev => ({ ...prev, teamName: event.target.value }))}
-                    className="w-full rounded-xl border-2 border-[#191A23] bg-[#F3F3F3] py-3 pl-11 pr-4 text-sm font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
+                    className="w-full rounded-2xl bg-[#FFFDF8] py-3 pl-11 pr-4 text-sm font-bold shadow-[0_8px_22px_rgba(25,26,35,0.06)] ring-1 ring-[#191A23]/10 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#CDB0E7]"
                     placeholder="Team name"
                   />
                 </div>
@@ -187,13 +221,13 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
 
               <Field label="Team Size">
                 <div className="grid grid-cols-4 gap-2">
-                  {[3, 4, 5].map(size => (
+                  {formSettings.registration.teamSizes.map(size => (
                     <button
                       key={size}
                       type="button"
                       onClick={() => setFormData(prev => ({ ...prev, teamSize: size }))}
-                      className={`h-12 rounded-xl border-2 border-[#191A23] text-sm font-black transition-all ${
-                        formData.teamSize === size ? 'bg-[#B9FF66] shadow-[2px_2px_0px_#191A23]' : 'bg-[#F3F3F3] hover:bg-white'
+                      className={`h-12 rounded-2xl text-sm font-black transition-all ring-1 ring-[#191A23]/10 ${
+                        formData.teamSize === size ? 'bg-[#B9EDC8] shadow-[0_12px_24px_rgba(25,26,35,0.10)]' : 'bg-[#FFFDF8] hover:bg-white'
                       }`}
                     >
                       {size}
@@ -211,7 +245,7 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
                     type="text"
                     value={formData.leaderName}
                     onChange={(event) => setFormData(prev => ({ ...prev, leaderName: event.target.value }))}
-                    className="w-full rounded-xl border-2 border-[#191A23] bg-[#F3F3F3] py-3 pl-11 pr-4 text-sm font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
+                    className="w-full rounded-2xl bg-[#FFFDF8] py-3 pl-11 pr-4 text-sm font-bold shadow-[0_8px_22px_rgba(25,26,35,0.06)] ring-1 ring-[#191A23]/10 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#CDB0E7]"
                     placeholder="Leader name"
                   />
                 </div>
@@ -227,7 +261,7 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
                       if (!user) setFormData(prev => ({ ...prev, leaderEmail: event.target.value }));
                     }}
                     readOnly={Boolean(user)}
-                    className="w-full rounded-xl border-2 border-[#191A23] bg-[#F3F3F3] py-3 pl-11 pr-4 text-sm font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#B9FF66] read-only:cursor-not-allowed read-only:bg-[#E9EAEE] read-only:text-[#191A23]/70"
+                    className="w-full rounded-2xl bg-[#FFFDF8] py-3 pl-11 pr-4 text-sm font-bold shadow-[0_8px_22px_rgba(25,26,35,0.06)] ring-1 ring-[#191A23]/10 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#CDB0E7] read-only:cursor-not-allowed read-only:bg-[#F0ECE4] read-only:text-[#191A23]/70"
                     placeholder="leader@example.com"
                   />
                 </div>
@@ -247,7 +281,7 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
                     type="text"
                     value={formData.collegeName}
                     onChange={(event) => setFormData(prev => ({ ...prev, collegeName: event.target.value }))}
-                    className="w-full rounded-xl border-2 border-[#191A23] bg-[#F3F3F3] py-3 pl-11 pr-4 text-sm font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
+                    className="w-full rounded-2xl bg-[#FFFDF8] py-3 pl-11 pr-4 text-sm font-bold shadow-[0_8px_22px_rgba(25,26,35,0.06)] ring-1 ring-[#191A23]/10 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#CDB0E7]"
                     placeholder="College or campus"
                   />
                 </div>
@@ -260,7 +294,7 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
                     type="text"
                     value={formData.fieldOfStudy}
                     onChange={(event) => setFormData(prev => ({ ...prev, fieldOfStudy: event.target.value }))}
-                    className="w-full rounded-xl border-2 border-[#191A23] bg-[#F3F3F3] py-3 pl-11 pr-4 text-sm font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
+                    className="w-full rounded-2xl bg-[#FFFDF8] py-3 pl-11 pr-4 text-sm font-bold shadow-[0_8px_22px_rgba(25,26,35,0.06)] ring-1 ring-[#191A23]/10 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#CDB0E7]"
                     placeholder="Department or course"
                   />
                 </div>
@@ -275,7 +309,7 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
                     type="tel"
                     value={formData.phoneNumber}
                     onChange={(event) => setFormData(prev => ({ ...prev, phoneNumber: event.target.value }))}
-                    className="w-full rounded-xl border-2 border-[#191A23] bg-[#F3F3F3] py-3 pl-11 pr-4 text-sm font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
+                    className="w-full rounded-2xl bg-[#FFFDF8] py-3 pl-11 pr-4 text-sm font-bold shadow-[0_8px_22px_rgba(25,26,35,0.06)] ring-1 ring-[#191A23]/10 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#CDB0E7]"
                     placeholder="Phone number"
                   />
                 </div>
@@ -288,7 +322,7 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
                     type="text"
                     value={formData.location}
                     onChange={(event) => setFormData(prev => ({ ...prev, location: event.target.value }))}
-                    className="w-full rounded-xl border-2 border-[#191A23] bg-[#F3F3F3] py-3 pl-11 pr-4 text-sm font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
+                    className="w-full rounded-2xl bg-[#FFFDF8] py-3 pl-11 pr-4 text-sm font-bold shadow-[0_8px_22px_rgba(25,26,35,0.06)] ring-1 ring-[#191A23]/10 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#CDB0E7]"
                     placeholder="District"
                   />
                 </div>
@@ -300,13 +334,13 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
                 <h2 className="text-xl font-black">Team Members</h2>
                 <div className="grid gap-4">
                   {visibleMembers.map((member, index) => (
-                    <div key={index} className="grid md:grid-cols-2 gap-4 rounded-xl border-2 border-[#191A23]/15 bg-[#F7F8FA] p-4">
+                    <div key={index} className="grid gap-4 rounded-2xl bg-[#FFF8E8] p-4 ring-1 ring-[#191A23]/10 md:grid-cols-2">
                       <Field label={`Member ${index + 2} Name`} error={errors[`member-${index}-name`]}>
                         <input
                           type="text"
                           value={member.name}
                           onChange={(event) => updateMember(index, 'name', event.target.value)}
-                          className="w-full rounded-xl border-2 border-[#191A23] bg-white px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
+                          className="w-full rounded-2xl bg-white px-4 py-3 text-sm font-bold shadow-[0_8px_22px_rgba(25,26,35,0.06)] ring-1 ring-[#191A23]/10 focus:outline-none focus:ring-2 focus:ring-[#CDB0E7]"
                           placeholder="Member name"
                         />
                       </Field>
@@ -315,7 +349,7 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
                           type="email"
                           value={member.email || ''}
                           onChange={(event) => updateMember(index, 'email', event.target.value)}
-                          className="w-full rounded-xl border-2 border-[#191A23] bg-white px-4 py-3 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
+                          className="w-full rounded-2xl bg-white px-4 py-3 text-sm font-bold shadow-[0_8px_22px_rgba(25,26,35,0.06)] ring-1 ring-[#191A23]/10 focus:outline-none focus:ring-2 focus:ring-[#CDB0E7]"
                           placeholder="member@example.com"
                         />
                       </Field>
@@ -326,16 +360,16 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
             )}
           </section>
 
-          <aside className="rounded-2xl border-2 border-[#191A23] bg-white p-5 md:p-7 shadow-[5px_5px_0px_#B9FF66] space-y-5 h-fit">
+          <aside className="h-fit space-y-5 rounded-[28px] bg-white/92 p-4 shadow-[0_24px_80px_rgba(25,26,35,0.10)] ring-1 ring-[#191A23]/10 md:p-6">
             <Field label="Current Stage of Idea">
               <div className="grid gap-2">
-                {['Idea', 'Validated Idea', 'Prototype'].map(level => (
+                {formSettings.registration.ideaStages.map(level => (
                   <button
                     key={level}
                     type="button"
                     onClick={() => setFormData(prev => ({ ...prev, experienceLevel: level }))}
-                    className={`flex items-center justify-between rounded-xl border-2 border-[#191A23] p-3 text-left text-sm font-black ${
-                      formData.experienceLevel === level ? 'bg-[#B9FF66]' : 'bg-[#F3F3F3] hover:bg-white'
+                    className={`flex items-center justify-between rounded-2xl p-3 text-left text-sm font-black ring-1 ring-[#191A23]/10 ${
+                      formData.experienceLevel === level ? 'bg-[#B9EDC8]' : 'bg-[#FFFDF8] hover:bg-white'
                     }`}
                   >
                     {level}
@@ -345,14 +379,14 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
               </div>
             </Field>
 
-            <label className="flex items-start gap-3 rounded-xl border-2 border-[#191A23]/15 bg-[#F7F8FA] p-4 text-xs font-bold leading-relaxed">
+            <label className="flex items-start gap-3 rounded-2xl bg-[#FFF8E8] p-4 text-xs font-bold leading-relaxed ring-1 ring-[#191A23]/10">
               <input
                 type="checkbox"
                 checked={formData.agreeToCodeOfConduct}
                 onChange={(event) => setFormData(prev => ({ ...prev, agreeToCodeOfConduct: event.target.checked }))}
-                className="mt-0.5 h-4 w-4 accent-[#B9FF66]"
+                className="mt-0.5 h-4 w-4 accent-[#B9EDC8]"
               />
-              I confirm the team details are correct and understand that teams must submit a pitch deck covering problem statement, SDG alignment, solution, impact, feasibility, scalability, and sustainability.
+              {formSettings.registration.declaration}
             </label>
             {errors.agreeToCodeOfConduct && <p className="text-xs font-bold text-red-600">{errors.agreeToCodeOfConduct}</p>}
             {errors.submit && <p className="rounded-xl border-2 border-red-200 bg-red-50 p-3 text-xs font-bold text-red-600">{errors.submit}</p>}
@@ -362,7 +396,7 @@ export default function RegistrationPage({ user, onAuthClick, onBack, onRegister
               disabled={submitting || !user}
               className="neo-btn flex w-full items-center justify-center gap-2 py-4 text-sm uppercase cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {submitting ? 'Saving Team...' : 'Register Now'} <Send className="w-4 h-4" />
+              {submitting ? 'Saving Team...' : formSettings.registration.submitLabel} <Send className="w-4 h-4" />
             </button>
           </aside>
         </form>

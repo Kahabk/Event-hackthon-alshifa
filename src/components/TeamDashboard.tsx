@@ -25,7 +25,7 @@ import { db } from '../lib/firebase';
 import { AccountRegistration, IdeaSubmission, Registration } from '../types';
 import FullScreenVideoLoader from './FullScreenVideoLoader';
 import { LOADER_CYCLE_MS } from '../loaderConfig';
-import { TRACKS } from '../data';
+import { defaultFormSettings, formSettingsCollection, formSettingsDocId, normalizeFormSettings } from '../lib/formSettings';
 
 interface TeamDashboardProps {
   user: FirebaseUser | null;
@@ -294,6 +294,7 @@ const writeDashboardCache = (uid: string, registration: Registration | null, sub
 };
 
 export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }: TeamDashboardProps) {
+  const [formSettings, setFormSettings] = useState(defaultFormSettings);
   const [registration, setRegistration] = useState<Registration | null>(null);
   const [submission, setSubmission] = useState<IdeaSubmission>(initialSubmission);
   const [loading, setLoading] = useState(true);
@@ -301,6 +302,45 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState('');
   const [errors, setErrors] = useState<IdeaErrors>({});
+
+  useEffect(() => {
+    let active = true;
+
+    getDoc(doc(db, formSettingsCollection, formSettingsDocId))
+      .then(snapshot => {
+        if (!active || !snapshot.exists()) return;
+        setFormSettings(normalizeFormSettings(snapshot.data()));
+      })
+      .catch(() => {
+        if (active) setFormSettings(defaultFormSettings);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const activeSectionFields = useMemo(() => (
+    SECTION_FIELDS
+      .map(field => ({
+        ...field,
+        ...(formSettings.dashboard.sections.find(setting => setting.key === field.key) || {}),
+      }))
+      .filter(field => field.enabled !== false)
+  ), [formSettings.dashboard.sections]);
+
+  const activeLinkFields = useMemo(() => (
+    LINK_FIELDS
+      .map(field => ({
+        ...field,
+        ...(formSettings.dashboard.links.find(setting => setting.key === field.key) || {}),
+      }))
+      .filter(field => field.enabled !== false)
+  ), [formSettings.dashboard.links]);
+
+  const activeDomains = useMemo(() => (
+    formSettings.dashboard.domains.filter(domain => domain.enabled !== false)
+  ), [formSettings.dashboard.domains]);
 
   useEffect(() => {
     let active = true;
@@ -405,47 +445,49 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
   }, [user?.uid]);
 
   const completion = useMemo(() => {
-    const filledSections = SECTION_FIELDS.filter(field => String(submission[field.key] || '').trim().length > 0).length;
+    const filledSections = activeSectionFields.filter(field => String(submission[field.key] || '').trim().length > 0).length;
     const hasTrack = Boolean(submission.track?.trim());
-    const hasPpt = Boolean(submission.pptUrl.trim());
+    const requiredLinks = activeLinkFields.filter(field => field.required);
+    const hasRequiredLinks = requiredLinks.every(field => String(submission[field.key] || '').trim());
     const isSubmitted = submission.status === 'submitted';
-    const completedItems = 1 + (hasTrack ? 1 : 0) + filledSections + (hasPpt ? 1 : 0) + (isSubmitted ? 1 : 0);
-    const totalItems = 1 + 1 + SECTION_FIELDS.length + 1 + 1;
+    const completedItems = 1 + (!formSettings.dashboard.requireDomain || hasTrack ? 1 : 0) + filledSections + (hasRequiredLinks ? 1 : 0) + (isSubmitted ? 1 : 0);
+    const totalItems = 1 + 1 + activeSectionFields.length + 1 + 1;
     return Math.round((completedItems / totalItems) * 100);
-  }, [submission]);
+  }, [activeLinkFields, activeSectionFields, formSettings.dashboard.requireDomain, submission]);
 
   const filledSections = useMemo(
-    () => SECTION_FIELDS.filter(field => String(submission[field.key] || '').trim().length > 0),
-    [submission],
+    () => activeSectionFields.filter(field => String(submission[field.key] || '').trim().length > 0),
+    [activeSectionFields, submission],
   );
 
   const remainingItems = useMemo(() => {
-    const missingSections = SECTION_FIELDS.filter(field => !String(submission[field.key] || '').trim());
+    const missingSections = activeSectionFields.filter(field => field.required && !String(submission[field.key] || '').trim());
+    const missingLinks = activeLinkFields.filter(field => field.required && !String(submission[field.key] || '').trim());
     const items: string[] = [];
 
-    if (!submission.track?.trim()) {
+    if (formSettings.dashboard.requireDomain && !submission.track?.trim()) {
       items.push('Select the idea domain.');
     }
     if (missingSections.length > 0) {
       items.push(`Complete ${missingSections.length} idea section${missingSections.length === 1 ? '' : 's'}.`);
     }
-    if (!submission.pptUrl.trim()) {
-      items.push('Add the PPT / pitch deck link.');
+    if (missingLinks.length > 0) {
+      items.push(`Add ${missingLinks.length} required attachment link${missingLinks.length === 1 ? '' : 's'}.`);
     }
     if (submission.status !== 'submitted') {
       items.push('Submit the final idea after review.');
     }
 
     return items.length ? items : ['Everything required is complete.'];
-  }, [submission]);
+  }, [activeLinkFields, activeSectionFields, formSettings.dashboard.requireDomain, submission]);
 
   const updateTextField = (key: IdeaField, value: string) => {
-    const limit = SECTION_FIELDS.find(field => field.key === key)?.limit || 1000;
+    const limit = activeSectionFields.find(field => field.key === key)?.limit || 1000;
     setSubmission(prev => ({ ...prev, [key]: value.slice(0, limit) }));
   };
 
   const updateLinkField = (key: LinkField, value: string) => {
-    const limit = LINK_FIELDS.find(field => field.key === key)?.limit || 250;
+    const limit = activeLinkFields.find(field => field.key === key)?.limit || 250;
     setSubmission(prev => ({ ...prev, [key]: value.slice(0, limit) }));
   };
 
@@ -453,30 +495,30 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
     const nextErrors: IdeaErrors = {};
 
     if (mode === 'submitted') {
-      if (!submission.track?.trim()) {
+      if (formSettings.dashboard.requireDomain && !submission.track?.trim()) {
         nextErrors.track = 'Select an idea domain.';
       }
 
-      SECTION_FIELDS.forEach(field => {
-        if (!String(submission[field.key] || '').trim()) {
+      activeSectionFields.forEach(field => {
+        if (field.required && !String(submission[field.key] || '').trim()) {
           nextErrors[field.key] = `${field.title} is required.`;
         }
       });
 
-      LINK_FIELDS.forEach(field => {
+      activeLinkFields.forEach(field => {
         if (field.required && !String(submission[field.key] || '').trim()) {
           nextErrors[field.key] = `${field.title} is required.`;
         }
       });
     }
 
-    SECTION_FIELDS.forEach(field => {
+    activeSectionFields.forEach(field => {
       if (String(submission[field.key] || '').length > field.limit) {
         nextErrors[field.key] = `${field.title} must stay within ${field.limit} characters.`;
       }
     });
 
-    LINK_FIELDS.forEach(field => {
+    activeLinkFields.forEach(field => {
       const value = String(submission[field.key] || '');
       if (value.length > field.limit) {
         nextErrors[field.key] = `${field.title} must stay within ${field.limit} characters.`;
@@ -601,9 +643,9 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
             <span className="inline-flex items-center gap-2 rounded-md border-2 border-[#191A23] bg-[#B9FF66] px-3 py-1.5 text-xs font-black uppercase shadow-[2px_2px_0px_#191A23]">
               <ClipboardList className="h-4 w-4" /> Team Dashboard
             </span>
-            <h1 className="text-4xl font-black tracking-tight text-[#191A23] md:text-6xl">Idea Submission</h1>
+            <h1 className="text-4xl font-black tracking-tight text-[#191A23] md:text-6xl">{formSettings.dashboard.title}</h1>
             <p className="max-w-2xl text-sm font-bold leading-relaxed text-[#191A23]/75 md:text-base">
-              Build your submission section by section, keep each answer focused, and submit the final version only after adding the PPT link.
+              {formSettings.dashboard.subtitle}
             </p>
           </div>
 
@@ -649,13 +691,13 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
           <DashboardCard
             icon={<ClipboardList className="h-5 w-5" />}
             label="Submission Progress"
-            title={`${filledSections.length}/${SECTION_FIELDS.length} sections`}
+            title={`${filledSections.length}/${activeSectionFields.length} sections`}
           >
             <div className="space-y-3">
               <ProgressTick done label="Team registered" />
-              <ProgressTick done={Boolean(submission.track?.trim())} label="Domain selected" />
-              <ProgressTick done={filledSections.length === SECTION_FIELDS.length} label="Idea sections completed" />
-              <ProgressTick done={Boolean(submission.pptUrl.trim())} label="PPT link added" />
+              <ProgressTick done={!formSettings.dashboard.requireDomain || Boolean(submission.track?.trim())} label="Domain selected" />
+              <ProgressTick done={activeSectionFields.filter(field => field.required).every(field => String(submission[field.key] || '').trim())} label="Idea sections completed" />
+              <ProgressTick done={activeLinkFields.filter(field => field.required).every(field => String(submission[field.key] || '').trim())} label="Required links added" />
               <ProgressTick done={submission.status === 'submitted'} label="Final idea submitted" />
               <ProgressTick done={false} label="Payment gateway coming soon" muted />
             </div>
@@ -728,7 +770,7 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
-                {TRACKS.map(track => {
+                {activeDomains.map(track => {
                   const selected = submission.track === track.title;
                   return (
                     <button
@@ -751,7 +793,7 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
               {errors.track && <p className="mt-3 text-xs font-bold text-red-600">{errors.track}</p>}
             </section>
 
-            {SECTION_FIELDS.map((field, index) => (
+            {activeSectionFields.map((field, index) => (
               <IdeaSection
                 key={field.key}
                 id={field.key}
@@ -779,7 +821,7 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
               </div>
 
               <div className="grid gap-4 lg:grid-cols-3">
-                {LINK_FIELDS.map(field => (
+                {activeLinkFields.map(field => (
                   <LinkField
                     key={field.key}
                     label={field.title}
@@ -826,7 +868,7 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
           <aside className="hidden h-fit rounded-2xl border-2 border-[#191A23] bg-white p-5 shadow-[5px_5px_0px_#B9FF66] xl:sticky xl:top-28 xl:block">
             <p className="font-mono text-xs font-black uppercase text-[#191A23]/55">Submission Map</p>
             <div className="mt-4 space-y-2">
-              {SECTION_FIELDS.map((field, index) => {
+              {activeSectionFields.map((field, index) => {
                 const filled = String(submission[field.key] || '').trim().length > 0;
                 return (
                   <a

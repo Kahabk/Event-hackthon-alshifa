@@ -377,9 +377,9 @@ export default function JudgeReviewPanel({ user, onBack, onLogin }: JudgeReviewP
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
-            <JudgeStat label="Assigned" value={assignments.length} index={0} />
-            <JudgeStat label="Completed" value={completedAssignments.length} index={1} />
-            <JudgeStat label="Pending" value={pendingAssignments.length} index={2} />
+            <JudgeStat label="Assigned" value={assignments.length} />
+            <JudgeStat label="Completed" value={completedAssignments.length} />
+            <JudgeStat label="Pending" value={pendingAssignments.length} />
           </div>
         </motion.header>
 

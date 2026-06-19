@@ -1,191 +1,265 @@
-import { useState } from 'react';
-import { Menu, X, ArrowRight, LayoutDashboard, ShieldCheck, UserCircle } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ClipboardCheck, Gavel, LayoutDashboard, LogIn, Menu, ShieldCheck, X } from 'lucide-react';
+import AppleStyleAvatar from './AppleStyleAvatar';
 
 interface NavbarProps {
   onRegisterClick: () => void;
   onAdminClick: () => void;
   onJudgeClick: () => void;
+  onVolunteerClick: () => void;
   onDashboardClick: () => void;
   onHomeClick: () => void;
   isLoggedIn: boolean;
   isAdmin: boolean;
   isJudge: boolean;
+  isVolunteer: boolean;
   userEmail?: string | null;
+  userDisplayName?: string | null;
+  userPhotoURL?: string | null;
   onAuthClick: () => void;
   onProfileClick: () => void;
 }
 
-export default function Navbar({ onRegisterClick, onAdminClick, onJudgeClick, onDashboardClick, onHomeClick, isLoggedIn, isAdmin, isJudge, userEmail, onAuthClick, onProfileClick }: NavbarProps) {
+export default function Navbar({ onRegisterClick, onAdminClick, onJudgeClick, onVolunteerClick, onDashboardClick, onHomeClick, isLoggedIn, isAdmin, isJudge, isVolunteer, userEmail, userDisplayName, userPhotoURL, onAuthClick, onProfileClick }: NavbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const navLinks = [
-    { label: 'About', href: '#about' },
-    { label: 'Domains', href: '#tracks' },
-    { label: 'Stages', href: '#schedule' },
-    { label: 'Prizes', href: '#prizes' },
-    { label: 'Glimpses', href: '#product-videos' },
-    { label: 'Mentors', href: '#mentors' },
-    { label: 'FAQ', href: '#faq' },
-  ];
+  useEffect(() => {
+    document.documentElement.dataset.theme = 'light';
+    window.localStorage.removeItem('shifa-sdg-theme');
+  }, []);
 
-  const allNavLinks = isJudge
-    ? []
-    : isAdmin
-      ? [{ label: 'Admin', href: '/admin', admin: true }, ...navLinks]
-      : navLinks;
+  const profileName = isAdmin ? 'Admin' : isJudge ? 'Judge' : isVolunteer ? 'Volunteer' : (userDisplayName || userEmail?.split('@')[0] || 'Participant');
+  const profileRole = isAdmin ? 'Event Manager' : isJudge ? 'Review Panel' : isVolunteer ? 'Attendance Desk' : 'Team Profile';
+  const workspaceLabel = isAdmin ? 'Admin' : isJudge ? 'Judge' : isVolunteer ? 'Volunteer' : 'Team';
+  const volunteerOnly = isVolunteer && !isAdmin && !isJudge;
+  const workspaceIcon = isAdmin
+    ? <ShieldCheck className="h-4 w-4" />
+    : isJudge
+      ? <Gavel className="h-4 w-4" />
+      : isVolunteer
+        ? <ClipboardCheck className="h-4 w-4" />
+        : <LayoutDashboard className="h-4 w-4" />;
+  const handleWorkspaceClick = () => {
+    if (!isLoggedIn) {
+      onAuthClick();
+      return;
+    }
+    if (isAdmin) {
+      onAdminClick();
+      return;
+    }
+    if (isJudge) {
+      onJudgeClick();
+      return;
+    }
+    if (isVolunteer) {
+      onVolunteerClick();
+      return;
+    }
+    onDashboardClick();
+  };
+
+  const navItems = volunteerOnly
+    ? [{ label: 'Volunteer', onClick: onVolunteerClick, icon: workspaceIcon, active: true }]
+    : [
+      {
+        label: workspaceLabel,
+        onClick: handleWorkspaceClick,
+        icon: workspaceIcon,
+      },
+      { label: 'Domains', href: '#tracks' },
+      { label: 'Stages', href: '#schedule' },
+      { label: 'Prizes', href: '#prizes' },
+      { label: 'Mentors', href: '#mentors' },
+      { label: 'FAQ', href: '#faq' },
+      ...(isAdmin ? [{ label: 'Control Room', onClick: onAdminClick }] : []),
+      ...(isVolunteer || isAdmin ? [{ label: 'Volunteer', onClick: onVolunteerClick }] : []),
+      ...(!isJudge && !isVolunteer ? [{ label: 'Register', onClick: onRegisterClick, active: true }] : []),
+    ];
 
   return (
-    <nav className="fixed top-0 left-0 w-full z-40 bg-white border-b-3 border-[#191A23] py-4 px-4 md:px-8">
-      <div className="max-w-7xl mx-auto flex items-center justify-between">
-        {/* Brand Logo */}
+    <nav className="theme-header fixed left-0 top-0 z-40 w-full px-3 py-2.5 md:px-8 md:py-3">
+      <div className="mx-auto grid max-w-7xl grid-cols-[auto_1fr_auto] items-center gap-3">
         <a
           href="/"
           onClick={(event) => {
             event.preventDefault();
             onHomeClick();
           }}
-          className="flex items-center gap-2 group cursor-pointer"
+          className="theme-header-logo group cursor-pointer"
+          aria-label="Shifa SDG home"
         >
-          <div className="bg-[#B9FF66] text-[#191A23] font-mono font-black text-xl px-3.5 py-1.5 border-3 border-[#191A23] rounded-xl shadow-[3px_3px_0px_#191A23] group-hover:translate-x-[-1px] group-hover:translate-y-[-1px] group-hover:shadow-[4px_4px_0px_#191A23] transition-all">
+          <span className="theme-brand-mark bg-[#B9FF66] text-[#191A23] font-mono font-black text-xl px-3.5 py-1.5 border-3 border-[#191A23] rounded-xl shadow-[3px_3px_0px_#191A23] group-hover:-translate-y-0.5 transition-all">
             SDG
-          </div>
-          <span className="font-sans font-black text-2xl tracking-tight text-[#191A23] select-none">
+          </span>
+          <span className="hidden xl:inline font-sans font-black text-xl tracking-tight text-[#191A23] select-none">
             Shifa SDG
           </span>
         </a>
 
-        {/* Desktop Links */}
-        {allNavLinks.length > 0 && (
-          <div className="hidden md:flex items-center gap-4 bg-white border-2 border-[#191A23] px-5 py-2.5 rounded-full shadow-[2.5px_2.5px_0px_#191A23]">
-            {allNavLinks.map((link) => (
-              <a
-                key={link.label}
-                href={link.href}
-                onClick={(event) => {
-                  if ('admin' in link && link.admin) {
-                    event.preventDefault();
-                    onAdminClick();
-                  }
-                }}
-                className="text-xs uppercase font-black text-[#191A23] hover:bg-[#B9FF66] px-2.5 py-1 rounded-lg border border-transparent hover:border-[#191A23] transition-all"
-              >
-                {link.label}
-              </a>
-            ))}
-          </div>
-        )}
+        <div className="hidden justify-center xl:flex">
+          <div className="theme-nav-pill flex items-center gap-1 px-2 py-2">
+            {navItems.map((item) => {
+              const content = (
+                <>
+                  {'icon' in item && item.icon}
+                  <span>{item.label}</span>
+                </>
+              );
 
-        {/* Desktop Action Button */}
-        <div className="hidden md:flex items-center gap-3">
+              if ('href' in item) {
+                return (
+                  <a
+                    key={item.label}
+                    href={item.href}
+                    className={`theme-header-link ${'active' in item && item.active ? 'theme-header-link-active' : ''}`}
+                  >
+                    {content}
+                  </a>
+                );
+              }
+
+              return (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={item.onClick}
+                  className={`theme-header-link ${'active' in item && item.active ? 'theme-header-link-active' : ''}`}
+                >
+                  {content}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="hidden items-center justify-end gap-3 md:flex">
+          <button
+            type="button"
+            onClick={isLoggedIn ? handleWorkspaceClick : onAuthClick}
+            className="theme-compact-header-action xl:hidden"
+          >
+            {isLoggedIn ? workspaceIcon : <LogIn className="h-4 w-4" />}
+            <span>{isLoggedIn ? workspaceLabel : 'Login'}</span>
+          </button>
+          {!isJudge && !isVolunteer && (
+            <button
+              type="button"
+              onClick={onRegisterClick}
+              className="theme-compact-header-action theme-compact-header-action-primary xl:hidden"
+            >
+              Register
+            </button>
+          )}
           {isLoggedIn ? (
-            <>
-              <button
-                type="button"
-                onClick={isJudge ? onJudgeClick : onDashboardClick}
-                className="neo-btn px-4 py-2.5 text-sm uppercase flex items-center gap-1.5 cursor-pointer"
-              >
-                <LayoutDashboard className="w-4 h-4" /> {isJudge ? 'Judge Panel' : 'Dashboard'}
-              </button>
-              <button
-                type="button"
-                onClick={onProfileClick}
-                className="neo-btn-white px-4 py-2.5 text-sm uppercase flex items-center gap-1.5 cursor-pointer max-w-[180px]"
-                title={userEmail || 'Profile'}
-              >
-                {isAdmin || isJudge ? <ShieldCheck className="w-4 h-4" /> : <UserCircle className="w-4 h-4" />}
-                <span className="truncate">{isAdmin ? 'Admin' : isJudge ? 'Judge' : 'Profile'}</span>
-              </button>
-            </>
+            <button
+              type="button"
+              onClick={onProfileClick}
+              className="theme-profile-capsule"
+              title={userEmail || 'Profile'}
+            >
+              <AppleStyleAvatar size="sm" variant={isAdmin || isJudge || isVolunteer ? 'admin' : 'purple'} imageUrl={userPhotoURL} />
+              <span className="min-w-0 text-left">
+                <span className="block truncate text-sm font-black leading-tight">{profileName}</span>
+                <span className="block truncate text-[10px] font-bold leading-tight opacity-70">{profileRole}</span>
+              </span>
+            </button>
           ) : (
             <button
               type="button"
               onClick={onAuthClick}
-              className="neo-btn-white px-4 py-2.5 text-sm uppercase flex items-center gap-1.5 cursor-pointer"
+              className="theme-profile-capsule"
             >
-              Login
+              <AppleStyleAvatar size="sm" variant="purple" />
+              <span className="text-sm font-black">Login</span>
             </button>
           )}
-          {!isJudge && (
+
+        </div>
+
+        <div className="flex min-w-0 justify-end gap-2 md:hidden">
+          <button
+            type="button"
+            onClick={isLoggedIn ? handleWorkspaceClick : onAuthClick}
+            className="theme-mobile-top-action"
+            title={isLoggedIn ? `${workspaceLabel} workspace` : 'Login'}
+          >
+            {isLoggedIn ? workspaceIcon : <LogIn className="h-4 w-4" />}
+            <span>{isLoggedIn ? workspaceLabel : 'Login'}</span>
+          </button>
+          {!volunteerOnly && (
             <button
-              id="nav-register-btn"
+              id="nav-mobile-toggle"
               type="button"
-              onClick={onRegisterClick}
-              className="neo-btn-white px-5 py-2.5 text-sm uppercase flex items-center gap-1.5 cursor-pointer"
+              onClick={() => setMobileMenuOpen(prev => !prev)}
+              className="theme-settings-button"
+              aria-label="Toggle Navigation menu"
             >
-              Register Now <ArrowRight className="w-4 h-4" />
+              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
           )}
         </div>
-
-        {/* Mobile Toggle */}
-        <button
-          id="nav-mobile-toggle"
-          type="button"
-          onClick={() => setMobileMenuOpen(prev => !prev)}
-          className="md:hidden bg-white text-[#191A23] p-2 border-2 border-[#191A23] rounded-xl shadow-[2px_2px_0px_#191A23] active:translate-y-0.5 cursor-pointer transition-all"
-          aria-label="Toggle Navigation menu"
-        >
-          {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-        </button>
       </div>
 
-      {/* Mobile Menu Drawer */}
       {mobileMenuOpen && (
-        <div id="mobile-menu-drawer" className="md:hidden absolute top-full left-0 w-full bg-white border-b-3 border-[#191A23] py-6 px-6 shadow-xl flex flex-col gap-5">
-          <div className="flex flex-col gap-4">
-            {allNavLinks.map((link) => (
-              <a
-                key={link.label}
-                href={link.href}
-                onClick={(event) => {
-                  setMobileMenuOpen(false);
-                  if ('admin' in link && link.admin) {
-                    event.preventDefault();
-                    onAdminClick();
-                  } else if ('judge' in link && link.judge) {
-                    event.preventDefault();
-                    onJudgeClick();
-                  }
-                }}
-                className="text-lg font-black text-[#191A23] hover:text-[#B9FF66] border-b border-[#191A23]/10 pb-2 transition-all"
-              >
-                {link.label}
-              </a>
-            ))}
+        <div id="mobile-menu-drawer" className="theme-mobile-drawer soft-card-enter md:hidden absolute top-full left-0 w-full border-b-3 border-[#191A23] py-5 px-4 shadow-xl flex flex-col gap-4">
+          <div className="flex flex-col gap-3">
+            {navItems.map((item) => {
+              if ('href' in item) {
+                return (
+                  <a
+                    key={item.label}
+                    href={item.href}
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={`theme-mobile-link ${'active' in item && item.active ? 'theme-mobile-link-active' : ''}`}
+                  >
+                    {item.label}
+                  </a>
+                );
+              }
+
+              return (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    item.onClick();
+                  }}
+                  className={`theme-mobile-link text-left ${'active' in item && item.active ? 'theme-mobile-link-active' : ''}`}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setMobileMenuOpen(false);
-              isLoggedIn ? (isJudge ? onJudgeClick() : onDashboardClick()) : onAuthClick();
-            }}
-            className="neo-btn w-full py-3.5 text-center uppercase text-sm cursor-pointer"
-          >
-            {isLoggedIn ? (isJudge ? 'Judge Panel' : 'Team Dashboard') : 'Login'}
-          </button>
-          {isLoggedIn && (
+
+          {isLoggedIn ? (
             <button
               type="button"
               onClick={() => {
                 setMobileMenuOpen(false);
                 onProfileClick();
               }}
-              className="neo-btn-white w-full py-3.5 text-center uppercase text-sm cursor-pointer"
+              className="theme-profile-capsule justify-start"
             >
-              {isAdmin ? 'Admin Profile' : isJudge ? 'Judge Profile' : 'Profile Settings'}
+              <AppleStyleAvatar size="sm" variant={isAdmin || isJudge || isVolunteer ? 'admin' : 'purple'} imageUrl={userPhotoURL} />
+              <span className="min-w-0 text-left">
+                <span className="block truncate text-sm font-black leading-tight">{profileName}</span>
+                <span className="block truncate text-[10px] font-bold leading-tight opacity-70">{profileRole}</span>
+              </span>
             </button>
-          )}
-          {!isJudge && (
+          ) : (
             <button
-              id="nav-mobile-register-btn"
               type="button"
               onClick={() => {
                 setMobileMenuOpen(false);
-                onRegisterClick();
+                onAuthClick();
               }}
-              className="neo-btn w-full py-3.5 text-center uppercase text-sm block cursor-pointer"
+              className="theme-profile-capsule justify-start"
             >
-              Register Now
+              <AppleStyleAvatar size="sm" variant="purple" />
+              <span className="text-sm font-black">Login</span>
             </button>
           )}
         </div>

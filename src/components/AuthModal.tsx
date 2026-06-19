@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { confirmPasswordReset, createUserWithEmailAndPassword, GoogleAuthProvider, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signInWithRedirect, updateProfile, User as FirebaseUser, verifyPasswordResetCode } from 'firebase/auth';
 import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
-import { ArrowLeft, Lock, Mail, User, X } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ClipboardCheck, Lock, Mail, Sparkles, User, X } from 'lucide-react';
 import { auth, db } from '../lib/firebase';
 import FullScreenVideoLoader from './FullScreenVideoLoader';
 import { waitForLoaderCycle } from '../loaderConfig';
@@ -190,27 +190,67 @@ export default function AuthModal({ isOpen, initialMode, onClose }: AuthModalPro
           animate={{ scale: 1, y: 0, opacity: 1 }}
           exit={{ scale: 0.95, y: 20, opacity: 0 }}
           transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-          className="relative z-10 w-full max-w-md bg-white text-[#191A23] border-4 border-[#191A23] rounded-[28px] shadow-[8px_8px_0px_#B9FF66] p-6"
+          className="relative z-10 max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-[30px] border-2 border-[#191A23] bg-[#cdb0e7] p-4 text-[#191A23] shadow-[8px_8px_0px_#191A23] md:p-6"
         >
-          <div className="flex items-start justify-between gap-4 border-b-2 border-[#191A23]/10 pb-4 mb-5">
+          <div className="mb-5 flex items-start justify-between gap-4 rounded-[24px] border-2 border-[#191A23] bg-[#fffdf8] p-4 shadow-[4px_4px_0px_rgba(31,31,32,0.18)]">
             <div>
-              <span className="bg-[#B9FF66] text-[#191A23] font-mono font-bold text-xs px-2.5 py-1 border-2 border-[#191A23] rounded-md shadow-[2px_2px_0px_#191A23] tracking-wide uppercase">
+              <span className="bg-[#191A23] text-white font-mono font-bold text-xs px-2.5 py-1 border-2 border-[#191A23] rounded-md shadow-[2px_2px_0px_#cdb0e7] tracking-wide uppercase">
                 Shifa SDG Account
               </span>
               <h2 className="mt-2 text-2xl font-black tracking-tight">
                 {mode === 'reset' ? 'Reset your password' : mode === 'signup' ? 'Create your registration account' : 'Sign in'}
               </h2>
+              <p className="mt-1 text-xs font-bold leading-relaxed text-[#191A23]/62">
+                {mode === 'signup'
+                  ? 'Create one protected login before registering your team and submitting the pitch deck.'
+                  : mode === 'signin'
+                    ? 'Open your team dashboard, registration banner, and idea submission workspace.'
+                    : 'Recover your account and return to the team workspace.'}
+              </p>
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 hover:bg-[#F3F3F3] border-2 border-[#191A23] rounded-lg shadow-[2px_2px_0px_#191A23] transition-all"
+              className="p-1.5 hover:bg-[#F3F3F3] border-2 border-[#191A23] rounded-full shadow-[2px_2px_0px_#191A23] transition-all"
               aria-label="Close sign in"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
 
+          <div className="grid gap-5 lg:grid-cols-[0.88fr_1.12fr]">
+            <aside className="rounded-[26px] border-2 border-[#191A23] bg-[#191A23] p-5 text-white shadow-[5px_5px_0px_rgba(31,31,32,0.22)]">
+              <div className="inline-flex h-12 w-12 items-center justify-center rounded-full border-2 border-white bg-[#cdb0e7] text-[#191A23]">
+                <Sparkles className="h-5 w-5" />
+              </div>
+              <h3 className="mt-5 text-3xl font-black leading-tight">
+                Account to finale journey
+              </h3>
+              <p className="mt-2 text-sm font-bold leading-relaxed text-white/68">
+                Your login connects team registration, QR banner access, dashboard drafts, and SDG pitch submission.
+              </p>
+              <div className="mt-6 grid gap-3">
+                {[
+                  ['Create account', 'Use email or Google sign-in.'],
+                  ['Register team', 'Save leader, members, college, and track.'],
+                  ['Submit idea', 'Build the pitch deck and update your dashboard.'],
+                ].map(([title, text], index) => (
+                  <div key={title} className="auth-journey-step rounded-2xl border border-white/12 bg-white p-3">
+                    <p className="flex items-center gap-2 text-sm font-black">
+                      <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#cdb0e7] text-xs text-[#191A23]">{index + 1}</span>
+                      {title}
+                    </p>
+                    <p className="mt-1 pl-8 text-xs font-bold leading-relaxed">{text}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-5 rounded-2xl border border-[#cdb0e7]/60 bg-[#cdb0e7]/18 p-3 text-xs font-black leading-relaxed text-white">
+                <ClipboardCheck className="mr-1 inline h-4 w-4 text-[#cdb0e7]" />
+                One account can own one registered team for the challenge.
+              </div>
+            </aside>
+
+            <div className="rounded-[26px] border-2 border-[#191A23] bg-[#fffdf8] p-4 shadow-[5px_5px_0px_rgba(31,31,32,0.18)] md:p-5">
           {mode === 'reset' ? (
             <div className="mb-5 space-y-3">
               <button
@@ -224,12 +264,12 @@ export default function AuthModal({ isOpen, initialMode, onClose }: AuthModalPro
               >
                 <ArrowLeft className="h-4 w-4" /> Back to login
               </button>
-              <p className="rounded-xl border-2 border-[#191A23]/10 bg-[#F3F3F3] p-3 text-xs font-bold leading-relaxed text-[#191A23]/70">
+              <p className="rounded-xl border-2 border-[#191A23]/10 bg-[#f7efe3] p-3 text-xs font-bold leading-relaxed text-[#191A23]/70">
                 Firebase sends a secure reset link/code. Paste the link below to reset the password inside this app. A short numeric OTP needs a backend OTP service.
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-2 mb-5 bg-[#F3F3F3] border-2 border-[#191A23] rounded-xl p-1">
+            <div className="grid grid-cols-2 gap-2 mb-5 bg-[#191A23] border-2 border-[#191A23] rounded-full p-1">
               {(['signup', 'signin'] as const).map(tab => (
                 <button
                   key={tab}
@@ -239,11 +279,11 @@ export default function AuthModal({ isOpen, initialMode, onClose }: AuthModalPro
                     setError('');
                     setSuccess('');
                   }}
-                  className={`py-2 text-xs font-black uppercase rounded-lg transition-all ${
-                    mode === tab ? 'bg-[#B9FF66] border-2 border-[#191A23]' : 'border-2 border-transparent'
+                  className={`py-2 text-xs font-black uppercase rounded-full transition-all ${
+                    mode === tab ? 'bg-[#cdb0e7] border-2 border-[#cdb0e7] text-[#191A23]' : 'border-2 border-transparent text-white'
                   }`}
                 >
-                  {tab === 'signup' ? 'Register' : 'Login'}
+                  {tab === 'signup' ? 'Create account' : 'Login'}
                 </button>
               ))}
             </div>
@@ -254,7 +294,7 @@ export default function AuthModal({ isOpen, initialMode, onClose }: AuthModalPro
               type="button"
               onClick={handleGoogleSignIn}
               disabled={submitting}
-              className="mb-4 flex w-full items-center justify-center gap-3 rounded-xl border-2 border-[#191A23] bg-white px-4 py-3 text-sm font-black uppercase shadow-[3px_3px_0px_#191A23] transition-all hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#191A23] disabled:cursor-not-allowed disabled:opacity-60"
+              className="mb-4 flex w-full items-center justify-center gap-3 rounded-2xl border-2 border-[#191A23] bg-[#f7efe3] px-4 py-3 text-sm font-black shadow-[3px_3px_0px_#191A23] transition-all hover:-translate-x-0.5 hover:-translate-y-0.5 hover:bg-[#cdb0e7] hover:shadow-[4px_4px_0px_#191A23] disabled:cursor-not-allowed disabled:opacity-60"
             >
               <span className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-[#191A23] font-sans text-sm font-black">
                 G
@@ -282,7 +322,7 @@ export default function AuthModal({ isOpen, initialMode, onClose }: AuthModalPro
                     type="text"
                     value={displayName}
                     onChange={(event) => setDisplayName(event.target.value)}
-                    className="w-full text-sm font-medium border-2 border-[#191A23] bg-[#F3F3F3] pl-11 pr-4 py-2.5 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#B9FF66]/50 transition-all"
+                    className="w-full text-sm font-bold border-2 border-[#191A23] bg-[#f7efe3] pl-11 pr-4 py-2.5 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#cdb0e7] transition-all"
                     placeholder="Your name"
                   />
                 </div>
@@ -299,7 +339,7 @@ export default function AuthModal({ isOpen, initialMode, onClose }: AuthModalPro
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                   required
-                  className="w-full text-sm font-medium border-2 border-[#191A23] bg-[#F3F3F3] pl-11 pr-4 py-2.5 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#B9FF66]/50 transition-all font-mono"
+                  className="w-full text-sm font-bold border-2 border-[#191A23] bg-[#f7efe3] pl-11 pr-4 py-2.5 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#cdb0e7] transition-all font-mono"
                   placeholder="you@example.com"
                 />
               </div>
@@ -317,7 +357,7 @@ export default function AuthModal({ isOpen, initialMode, onClose }: AuthModalPro
                         setError('');
                         setSuccess('');
                       }}
-                      className="text-xs font-black text-[#191A23] underline decoration-[#B9FF66] decoration-2 underline-offset-4"
+                      className="text-xs font-black text-[#191A23] underline decoration-[#cdb0e7] decoration-2 underline-offset-4"
                     >
                       Forgot password?
                     </button>
@@ -332,7 +372,7 @@ export default function AuthModal({ isOpen, initialMode, onClose }: AuthModalPro
                     onChange={(event) => setPassword(event.target.value)}
                     required
                     minLength={6}
-                    className="w-full text-sm font-medium border-2 border-[#191A23] bg-[#F3F3F3] pl-11 pr-4 py-2.5 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#B9FF66]/50 transition-all"
+                    className="w-full text-sm font-bold border-2 border-[#191A23] bg-[#f7efe3] pl-11 pr-4 py-2.5 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-[#cdb0e7] transition-all"
                     placeholder="Password"
                   />
                 </div>
@@ -354,14 +394,14 @@ export default function AuthModal({ isOpen, initialMode, onClose }: AuthModalPro
             <button
               type="submit"
               disabled={submitting}
-              className="w-full neo-btn py-3 text-sm uppercase cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+              className="w-full rounded-full border-2 border-[#191A23] bg-[#cdb0e7] py-3 text-sm font-black shadow-[3px_3px_0px_#191A23] transition hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#191A23] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting ? 'Working...' : mode === 'reset' ? 'Send Reset Email' : mode === 'signup' ? 'Create Account' : 'Login'}
             </button>
           </form>
 
           {mode === 'reset' && (
-            <div className="mt-5 space-y-4 rounded-2xl border-2 border-[#191A23] bg-[#F7F8FA] p-4">
+            <div className="mt-5 space-y-4 rounded-2xl border-2 border-[#191A23] bg-[#f7efe3] p-4">
               <div>
                 <p className="text-sm font-black">Reset inside app</p>
                 <p className="mt-1 text-xs font-bold leading-relaxed text-[#191A23]/60">
@@ -375,7 +415,7 @@ export default function AuthModal({ isOpen, initialMode, onClose }: AuthModalPro
                   type="text"
                   value={resetCode}
                   onChange={(event) => setResetCode(event.target.value)}
-                  className="w-full rounded-xl border-2 border-[#191A23] bg-white px-4 py-2.5 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
+                  className="w-full rounded-xl border-2 border-[#191A23] bg-white px-4 py-2.5 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-[#cdb0e7]"
                   placeholder="Paste email link or oobCode"
                 />
               </label>
@@ -387,7 +427,7 @@ export default function AuthModal({ isOpen, initialMode, onClose }: AuthModalPro
                     type="password"
                     value={resetPassword}
                     onChange={(event) => setResetPassword(event.target.value)}
-                    className="w-full rounded-xl border-2 border-[#191A23] bg-white px-4 py-2.5 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
+                    className="w-full rounded-xl border-2 border-[#191A23] bg-white px-4 py-2.5 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-[#cdb0e7]"
                     placeholder="New password"
                     minLength={6}
                   />
@@ -398,7 +438,7 @@ export default function AuthModal({ isOpen, initialMode, onClose }: AuthModalPro
                     type="password"
                     value={resetPasswordConfirm}
                     onChange={(event) => setResetPasswordConfirm(event.target.value)}
-                    className="w-full rounded-xl border-2 border-[#191A23] bg-white px-4 py-2.5 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
+                    className="w-full rounded-xl border-2 border-[#191A23] bg-white px-4 py-2.5 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-[#cdb0e7]"
                     placeholder="Confirm password"
                     minLength={6}
                   />
@@ -409,12 +449,14 @@ export default function AuthModal({ isOpen, initialMode, onClose }: AuthModalPro
                 type="button"
                 onClick={handleConfirmResetInApp}
                 disabled={submitting}
-                className="neo-btn-white w-full py-3 text-sm uppercase cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                className="w-full rounded-full border-2 border-[#191A23] bg-white py-3 text-sm font-black shadow-[3px_3px_0px_#191A23] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 Reset Password In App
               </button>
             </div>
           )}
+            </div>
+          </div>
         </motion.div>
       </div>
     </AnimatePresence>

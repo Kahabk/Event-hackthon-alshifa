@@ -25,6 +25,24 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/judges/$(request.auth.token.email)).data.active != false;
     }
 
+    function volunteerId() {
+      return request.auth.token.email;
+    }
+
+    function isVolunteer() {
+      return isSignedIn()
+        && request.auth.token.email != null
+        && exists(/databases/$(database)/documents/volunteers/$(volunteerId()))
+        && get(/databases/$(database)/documents/volunteers/$(volunteerId())).data.active != false;
+    }
+
+    function volunteerCanMark(listId) {
+      return isVolunteer()
+        && exists(/databases/$(database)/documents/attendanceLists/$(listId))
+        && get(/databases/$(database)/documents/attendanceLists/$(listId)).data.active == true
+        && get(/databases/$(database)/documents/volunteers/$(volunteerId())).data.allowedListIds.hasAny([listId]);
+    }
+
     function isOwnJudgeDoc(judgeId) {
       return isJudge()
         && judgeId == request.auth.token.email;
@@ -54,6 +72,7 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && request.resource.data.userId == request.auth.uid;
       allow read: if isAdmin()
+        || isVolunteer()
         || (isSignedIn() && resource.data.userId == request.auth.uid);
       allow update, delete: if isAdmin();
     }
@@ -111,6 +130,32 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    match /volunteers/{volunteerId} {
+      allow get: if isAdmin()
+        || (isSignedIn() && request.auth.token.email == volunteerId);
+      allow list, create, update, delete: if isAdmin();
+    }
+
+    match /attendanceLists/{listId} {
+      allow read: if isAdmin() || isVolunteer();
+      allow write: if isAdmin();
+    }
+
+    match /attendanceMarks/{markId} {
+      allow read: if isAdmin() || isVolunteer();
+      allow create, update: if isAdmin()
+        || (
+          volunteerCanMark(request.resource.data.listId)
+          && request.resource.data.markedByUid == request.auth.uid
+          && request.resource.data.markedByEmail == request.auth.token.email
+        );
+      allow delete: if isAdmin()
+        || (
+          volunteerCanMark(resource.data.listId)
+          && resource.data.markedByUid == request.auth.uid
+        );
+    }
+
     match /judgeAssignments/{assignmentId} {
       allow read: if isAdmin() || isOwnJudgeAssignment();
       allow create, delete: if isAdmin();
@@ -151,6 +196,11 @@ service cloud.firestore {
 
     match /auditLogs/{logId} {
       allow read, write: if isAdmin();
+    }
+
+    match /siteContent/{contentId} {
+      allow read: if true;
+      allow write: if isAdmin();
     }
   }
 }

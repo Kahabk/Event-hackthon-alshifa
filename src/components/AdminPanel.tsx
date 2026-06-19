@@ -6,6 +6,7 @@ import {
   doc,
   getDocs,
   limit,
+  onSnapshot,
   orderBy,
   query,
   QuerySnapshot,
@@ -15,12 +16,18 @@ import {
   updateDoc,
   writeBatch,
 } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import {
   ArrowLeft,
+  ArrowDown,
+  ArrowUp,
   BarChart3,
   Bell,
   ClipboardCheck,
+  CheckCircle2,
   Download,
+  Eye,
+  EyeOff,
   ExternalLink,
   FileText,
   Gavel,
@@ -28,8 +35,11 @@ import {
   Mail,
   Medal,
   Megaphone,
+  Monitor,
+  PlusCircle,
   Printer,
   RefreshCw,
+  Save,
   Search,
   ShieldCheck,
   Star,
@@ -37,13 +47,31 @@ import {
   Trophy,
   UserCheck,
   UserMinus,
+  UserPlus,
   Users,
 } from 'lucide-react';
 import { User as FirebaseUser } from 'firebase/auth';
-import { db } from '../lib/firebase';
-import { IdeaSubmission, StoredRegistration, TeamMember } from '../types';
+import { db, functions } from '../lib/firebase';
+import { AttendanceList, AttendanceMark, IdeaSubmission, StoredRegistration, TeamMember, Volunteer } from '../types';
+import {
+  createLandingSection,
+  defaultLandingContent,
+  LandingEditorContent,
+  LandingEditorSection,
+  LandingSectionLayout,
+  landingContentCollection,
+  landingContentDocId,
+  normalizeLandingContent,
+} from '../lib/landingContent';
+import {
+  defaultFormSettings,
+  formSettingsCollection,
+  formSettingsDocId,
+  normalizeFormSettings,
+} from '../lib/formSettings';
+import type { DashboardDomainSetting, EventFormSettings, IdeaSectionSetting, LinkFieldSetting } from '../lib/formSettings';
 
-type AdminTab = 'overview' | 'teams' | 'judges' | 'assignments' | 'reviews' | 'leaderboard' | 'rounds' | 'announcements' | 'finalists' | 'users' | 'audit';
+type AdminTab = 'overview' | 'landing' | 'forms' | 'teams' | 'attendance' | 'judges' | 'assignments' | 'reviews' | 'leaderboard' | 'rounds' | 'announcements' | 'finalists' | 'users' | 'audit';
 type ReviewStatus = 'pending' | 'under-review' | 'approved' | 'rejected' | 'needs-revision';
 type RoundName = 'Round 1' | 'Round 2' | 'Round 3';
 
@@ -158,6 +186,9 @@ interface AdminCache {
   auditLogs: AuditLog[];
   finalists: Finalist[];
   userProfiles: UserProfile[];
+  volunteers?: Volunteer[];
+  attendanceLists?: AttendanceList[];
+  attendanceMarks?: AttendanceMark[];
 }
 
 const ADMIN_CACHE_KEY = 'shifa-sdg-admin-cache-v1';
@@ -183,6 +214,20 @@ const blankAnnouncement: Omit<Announcement, 'id'> = {
   target: 'all-users',
   targetTeamIds: [],
   publishDate: new Date().toISOString().slice(0, 10),
+};
+
+const blankVolunteer: Omit<Volunteer, 'id'> = {
+  name: '',
+  email: '',
+  active: true,
+  allowedListIds: [],
+};
+
+const blankAttendanceList: Omit<AttendanceList, 'id'> = {
+  title: '',
+  description: '',
+  active: true,
+  color: 'mint',
 };
 
 const blankScoreForm: ScoreForm = {
@@ -232,9 +277,24 @@ const isLikelyUrl = (value: string) => {
 };
 
 const adminWriteError = (err: unknown, fallback: string) => {
+  const code = typeof err === 'object' && err && 'code' in err ? String((err as { code?: unknown }).code || '') : '';
+  const rawDetails = typeof err === 'object' && err && 'details' in err ? (err as { details?: unknown }).details : '';
+  const customData = typeof err === 'object' && err && 'customData' in err ? (err as { customData?: { serverResponse?: unknown } }).customData : undefined;
+  const details = (() => {
+    if (typeof rawDetails === 'string') return rawDetails;
+    if (rawDetails && typeof rawDetails === 'object') {
+      const detail = rawDetails as { code?: unknown; message?: unknown };
+      return [detail.code, detail.message].filter(Boolean).join(' ');
+    }
+    if (customData?.serverResponse) return String(customData.serverResponse);
+    return '';
+  })();
   const message = err instanceof Error ? err.message : fallback;
   if (message.toLowerCase().includes('permission')) {
     return `${fallback} Firebase rules rejected the write. Publish the latest firestore.rules and confirm this account is an active admin.`;
+  }
+  if (code || details) {
+    return `${fallback} ${code ? `[${code}] ` : ''}${message}${details ? ` ${details}` : ''}`;
   }
   return message;
 };
@@ -322,6 +382,11 @@ const safeAdminRead = async <T,>(
   }
 };
 
+const deleteAuthUserAccount = httpsCallable<
+  { uid: string },
+  { deletedUid: string; deletedEmail?: string; ownedTeamIds?: string[]; updatedMemberTeamIds?: string[] }
+>(functions, 'deleteAuthUser');
+
 export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPanelProps) {
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [registrations, setRegistrations] = useState<StoredRegistration[]>([]);
@@ -333,6 +398,9 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [finalists, setFinalists] = useState<Finalist[]>([]);
   const [userProfiles, setUserProfiles] = useState<UserProfile[]>([]);
+  const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
+  const [attendanceLists, setAttendanceLists] = useState<AttendanceList[]>([]);
+  const [attendanceMarks, setAttendanceMarks] = useState<AttendanceMark[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
@@ -344,10 +412,15 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
   const [selectedTeamId, setSelectedTeamId] = useState('');
   const [judgeForm, setJudgeForm] = useState(blankJudge);
   const [announcementForm, setAnnouncementForm] = useState(blankAnnouncement);
+  const [volunteerForm, setVolunteerForm] = useState(blankVolunteer);
+  const [attendanceListForm, setAttendanceListForm] = useState(blankAttendanceList);
   const [assignmentJudgeId, setAssignmentJudgeId] = useState('');
   const [assignmentRound, setAssignmentRound] = useState<RoundName>('Round 1');
   const [selectedAssignmentTeams, setSelectedAssignmentTeams] = useState<string[]>([]);
   const [scoreForm, setScoreForm] = useState<ScoreForm>(blankScoreForm);
+  const [landingDraft, setLandingDraft] = useState<LandingEditorContent>(defaultLandingContent);
+  const [selectedLandingSectionId, setSelectedLandingSectionId] = useState(defaultLandingContent.sections[0]?.id || '');
+  const [formDraft, setFormDraft] = useState<EventFormSettings>(defaultFormSettings);
 
   const adminName = user?.displayName || user?.email || 'Admin';
 
@@ -372,6 +445,9 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
         setAuditLogs(cached.auditLogs);
         setFinalists(cached.finalists);
         setUserProfiles(cached.userProfiles || []);
+        setVolunteers(cached.volunteers || []);
+        setAttendanceLists(cached.attendanceLists || []);
+        setAttendanceMarks(cached.attendanceMarks || []);
         setLoading(false);
         return;
       }
@@ -386,6 +462,9 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
         auditResult,
         finalistsResult,
         userProfilesResult,
+        volunteersResult,
+        attendanceListsResult,
+        attendanceMarksResult,
       ] = await Promise.all([
         safeAdminRead('registrations', getDocs(query(collection(db, 'registrations'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as StoredRegistration)),
         safeAdminRead('ideaSubmissions', getDocs(query(collection(db, 'ideaSubmissions'), orderBy('updatedAt', 'desc'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as IdeaSubmission)),
@@ -396,6 +475,9 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
         safeAdminRead('auditLogs', getDocs(query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc'), limit(80))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as AuditLog)),
         safeAdminRead('finalists', getDocs(query(collection(db, 'finalists'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as Finalist)),
         safeAdminRead('userProfiles', getDocs(query(collection(db, 'userProfiles'), orderBy('updatedAt', 'desc'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as UserProfile)),
+        safeAdminRead('volunteers', getDocs(query(collection(db, 'volunteers'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as Volunteer)),
+        safeAdminRead('attendanceLists', getDocs(query(collection(db, 'attendanceLists'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as AttendanceList)),
+        safeAdminRead('attendanceMarks', getDocs(query(collection(db, 'attendanceMarks'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as AttendanceMark)),
       ]);
 
       const nextData = {
@@ -408,6 +490,9 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
         auditLogs: auditResult.data,
         finalists: finalistsResult.data,
         userProfiles: userProfilesResult.data,
+        volunteers: volunteersResult.data,
+        attendanceLists: attendanceListsResult.data,
+        attendanceMarks: attendanceMarksResult.data,
       };
 
       const blockedCollections = [
@@ -420,6 +505,9 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
         auditResult,
         finalistsResult,
         userProfilesResult,
+        volunteersResult,
+        attendanceListsResult,
+        attendanceMarksResult,
       ].filter(result => result.error).map(result => result.label);
 
       if (blockedCollections.length) {
@@ -435,6 +523,9 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
       setAuditLogs(nextData.auditLogs);
       setFinalists(nextData.finalists);
       setUserProfiles(nextData.userProfiles);
+      setVolunteers(nextData.volunteers);
+      setAttendanceLists(nextData.attendanceLists);
+      setAttendanceMarks(nextData.attendanceMarks);
       writeCache(nextData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load admin dashboard.');
@@ -447,6 +538,46 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
     void refreshData();
   }, [isAdmin]);
 
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const unsubscribe = onSnapshot(
+      doc(db, landingContentCollection, landingContentDocId),
+      snapshot => {
+        const nextContent = snapshot.exists()
+          ? normalizeLandingContent(snapshot.data() as LandingEditorContent)
+          : defaultLandingContent;
+        setLandingDraft(nextContent);
+        setSelectedLandingSectionId(prev => (
+          nextContent.sections.some(section => section.id === prev)
+            ? prev
+            : nextContent.sections[0]?.id || ''
+        ));
+      },
+      err => {
+        setError(err instanceof Error ? err.message : 'Could not load landing page editor.');
+      },
+    );
+
+    return unsubscribe;
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const unsubscribe = onSnapshot(
+      doc(db, formSettingsCollection, formSettingsDocId),
+      snapshot => {
+        setFormDraft(snapshot.exists() ? normalizeFormSettings(snapshot.data()) : defaultFormSettings);
+      },
+      err => {
+        setError(err instanceof Error ? err.message : 'Could not load form settings.');
+      },
+    );
+
+    return unsubscribe;
+  }, [isAdmin]);
+
   const logAction = async (action: string) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     await setDoc(doc(db, 'auditLogs', id), {
@@ -455,6 +586,159 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
       createdAt: serverTimestamp(),
     });
     setAuditLogs(prev => [{ id, action, adminName, createdAt: new Date().toISOString() }, ...prev].slice(0, 80));
+  };
+
+  const updateLandingSection = (sectionId: string, patch: Partial<LandingEditorSection>) => {
+    setLandingDraft(prev => ({
+      ...prev,
+      sections: prev.sections.map(section => section.id === sectionId ? { ...section, ...patch } : section),
+    }));
+  };
+
+  const addLandingSection = () => {
+    const nextOrder = Math.max(0, ...landingDraft.sections.map(section => section.order || 0)) + 1;
+    const nextSection = createLandingSection(nextOrder);
+    setLandingDraft(prev => ({ ...prev, sections: [...prev.sections, nextSection] }));
+    setSelectedLandingSectionId(nextSection.id);
+  };
+
+  const removeLandingSection = (sectionId: string) => {
+    const nextSections = landingDraft.sections.filter(section => section.id !== sectionId);
+    setLandingDraft(prev => ({ ...prev, sections: nextSections }));
+    setSelectedLandingSectionId(nextSections[0]?.id || '');
+  };
+
+  const moveLandingSection = (sectionId: string, direction: 'up' | 'down') => {
+    const sorted = [...landingDraft.sections].sort((a, b) => a.order - b.order);
+    const currentIndex = sorted.findIndex(section => section.id === sectionId);
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= sorted.length) return;
+    const next = [...sorted];
+    [next[currentIndex], next[targetIndex]] = [next[targetIndex], next[currentIndex]];
+    setLandingDraft(prev => ({
+      ...prev,
+      sections: next.map((section, index) => ({ ...section, order: index + 1 })),
+    }));
+  };
+
+  const saveLandingContent = async () => {
+    await runAdminWrite('Publish landing page', async () => {
+      const selectedSection = landingDraft.sections.find(section => section.id === selectedLandingSectionId);
+      const payload: LandingEditorContent = {
+        ...landingDraft,
+        sections: landingDraft.sections.map((section, index) => ({ ...section, order: index + 1 })),
+        updatedAt: serverTimestamp(),
+        updatedBy: adminName,
+        updatedByEmail: user?.email || '',
+        updatedSection: selectedSection?.title || 'Landing page',
+      };
+      await setDoc(doc(db, landingContentCollection, landingContentDocId), payload, { merge: true });
+      await logAction(`Published landing page content${selectedSection?.title ? `: ${selectedSection.title}` : ''}`);
+      setToastMessage('Landing page content published.');
+    });
+  };
+
+  const saveFormSettings = async () => {
+    await runAdminWrite('Publish form settings', async () => {
+      const payload = normalizeFormSettings({
+        ...formDraft,
+        updatedAt: serverTimestamp(),
+        updatedBy: adminName,
+        updatedByEmail: user?.email || '',
+      });
+      await setDoc(doc(db, formSettingsCollection, formSettingsDocId), payload, { merge: true });
+      await logAction('Published registration and submission form settings');
+      setToastMessage('Form settings published.');
+    });
+  };
+
+  const saveVolunteer = async (event: FormEvent) => {
+    event.preventDefault();
+    const email = normalizeEmail(volunteerForm.email);
+    if (!email) return;
+
+    await runAdminWrite('Save volunteer', async () => {
+      const id = email;
+      const payload: Omit<Volunteer, 'id'> = {
+        name: volunteerForm.name.trim() || email.split('@')[0],
+        email,
+        active: volunteerForm.active,
+        allowedListIds: volunteerForm.allowedListIds,
+        updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+      };
+      await setDoc(doc(db, 'volunteers', id), payload, { merge: true });
+      setVolunteers(prev => {
+        const next = { id, ...payload } as Volunteer;
+        return prev.some(item => item.id === id)
+          ? prev.map(item => item.id === id ? next : item)
+          : [next, ...prev];
+      });
+      setVolunteerForm(blankVolunteer);
+      await logAction(`Saved volunteer ${email}`);
+      sessionStorage.removeItem(ADMIN_CACHE_KEY);
+      setToastMessage('Volunteer saved.');
+    });
+  };
+
+  const saveAttendanceList = async (event: FormEvent) => {
+    event.preventDefault();
+    const title = attendanceListForm.title.trim();
+    if (!title) return;
+
+    await runAdminWrite('Save attendance list', async () => {
+      const id = title.trim().replace(/\s+/g, '-').toLowerCase();
+      const payload: Omit<AttendanceList, 'id'> = {
+        title,
+        description: attendanceListForm.description?.trim() || '',
+        active: attendanceListForm.active,
+        color: attendanceListForm.color || 'mint',
+        updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+      };
+      await setDoc(doc(db, 'attendanceLists', id), payload, { merge: true });
+      setAttendanceLists(prev => {
+        const next = { id, ...payload } as AttendanceList;
+        return prev.some(item => item.id === id)
+          ? prev.map(item => item.id === id ? next : item)
+          : [next, ...prev];
+      });
+      setAttendanceListForm(blankAttendanceList);
+      await logAction(`Created attendance list ${title}`);
+      sessionStorage.removeItem(ADMIN_CACHE_KEY);
+      setToastMessage('Attendance list saved.');
+    });
+  };
+
+  const toggleVolunteerList = async (volunteer: Volunteer, listId: string) => {
+    const allowedListIds = volunteer.allowedListIds.includes(listId)
+      ? volunteer.allowedListIds.filter(id => id !== listId)
+      : [...volunteer.allowedListIds, listId];
+
+    await runAdminWrite('Assign volunteer checkpoint', async () => {
+      await updateDoc(doc(db, 'volunteers', volunteer.id), { allowedListIds, updatedAt: serverTimestamp() });
+      setVolunteers(prev => prev.map(item => item.id === volunteer.id ? { ...item, allowedListIds } : item));
+      sessionStorage.removeItem(ADMIN_CACHE_KEY);
+      setToastMessage('Volunteer assignment updated.');
+    });
+  };
+
+  const toggleVolunteerActive = async (volunteer: Volunteer) => {
+    await runAdminWrite('Update volunteer', async () => {
+      await updateDoc(doc(db, 'volunteers', volunteer.id), { active: !volunteer.active, updatedAt: serverTimestamp() });
+      setVolunteers(prev => prev.map(item => item.id === volunteer.id ? { ...item, active: !item.active } : item));
+      sessionStorage.removeItem(ADMIN_CACHE_KEY);
+      setToastMessage(`Volunteer ${volunteer.active ? 'disabled' : 'enabled'}.`);
+    });
+  };
+
+  const toggleAttendanceListActive = async (list: AttendanceList) => {
+    await runAdminWrite('Update attendance list', async () => {
+      await updateDoc(doc(db, 'attendanceLists', list.id), { active: !list.active, updatedAt: serverTimestamp() });
+      setAttendanceLists(prev => prev.map(item => item.id === list.id ? { ...item, active: !item.active } : item));
+      sessionStorage.removeItem(ADMIN_CACHE_KEY);
+      setToastMessage(`Attendance list ${list.active ? 'closed' : 'opened'}.`);
+    });
   };
 
   const submissionByTeamId = useMemo(() => {
@@ -930,46 +1214,62 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
     const memberTeams = email
       ? registrations.filter(registration => (registration.members || []).some(member => normalizeEmail(member.email || '') === email))
       : [];
-    const confirmed = window.confirm(`Delete database records for ${profile.email || profile.uid}? This does not delete the Firebase Auth account.`);
+    const confirmed = window.confirm(`Delete the Firebase Auth account and linked database records for ${profile.email || profile.uid}?`);
     if (!confirmed) return;
 
-    await runAdminWrite('Delete database user', async () => {
-      const batch = writeBatch(db);
-      batch.delete(doc(db, 'userProfiles', profile.id));
-      batch.delete(doc(db, 'accountRegistrations', profile.uid));
-      batch.delete(doc(db, 'ideaSubmissions', profile.uid));
-      if (email) batch.delete(doc(db, 'participantEmails', emailDocId(email)));
+    await runAdminWrite('Delete user account', async () => {
+      let deletedTeamIds = new Set(ownedTeam ? [ownedTeam.id] : []);
+      let deletedEmail = email;
+      let authDeleteCompleted = true;
 
-      if (ownedTeam) {
-        batch.delete(doc(db, 'registrations', ownedTeam.id));
-        batch.delete(doc(db, 'teamNames', ownedTeam.id));
-        batch.delete(doc(db, 'finalists', ownedTeam.id));
-        registrationEmails(ownedTeam).forEach(item => batch.delete(doc(db, 'participantEmails', emailDocId(item))));
+      try {
+        const result = await deleteAuthUserAccount({ uid: profile.uid });
+        deletedTeamIds = new Set(result.data.ownedTeamIds || (ownedTeam ? [ownedTeam.id] : []));
+        deletedEmail = normalizeEmail(result.data.deletedEmail || email);
+      } catch (err) {
+        const code = typeof err === 'object' && err && 'code' in err ? String((err as { code?: unknown }).code || '') : '';
+        if (!code.includes('internal')) throw err;
+
+        authDeleteCompleted = false;
+        const batch = writeBatch(db);
+        batch.delete(doc(db, 'userProfiles', profile.id));
+        batch.delete(doc(db, 'accountRegistrations', profile.uid));
+        batch.delete(doc(db, 'ideaSubmissions', profile.uid));
+        if (email) batch.delete(doc(db, 'participantEmails', emailDocId(email)));
+
+        if (ownedTeam) {
+          batch.delete(doc(db, 'registrations', ownedTeam.id));
+          batch.delete(doc(db, 'teamNames', ownedTeam.id));
+          batch.delete(doc(db, 'finalists', ownedTeam.id));
+          registrationEmails(ownedTeam).forEach(item => batch.delete(doc(db, 'participantEmails', emailDocId(item))));
+        }
+
+        memberTeams.forEach(team => {
+          if (ownedTeam?.id === team.id) return;
+          const nextMembers = (team.members || []).filter(member => normalizeEmail(member.email || '') !== email);
+          batch.update(doc(db, 'registrations', team.id), {
+            members: nextMembers,
+            teamSize: nextMembers.length + 1,
+            updatedAt: serverTimestamp(),
+          });
+        });
+
+        await batch.commit();
+        await logAction(`Deleted database records for ${profile.email || profile.uid}; Auth delete needs Cloud Function deploy`);
       }
 
-      memberTeams.forEach(team => {
-        if (ownedTeam?.id === team.id) return;
-        const nextMembers = (team.members || []).filter(member => normalizeEmail(member.email || '') !== email);
-        batch.update(doc(db, 'registrations', team.id), {
-          members: nextMembers,
-          teamSize: nextMembers.length + 1,
-          updatedAt: serverTimestamp(),
-        });
-      });
-
-      await batch.commit();
-      await logAction(`Deleted database user ${profile.email || profile.uid}`);
       setUserProfiles(prev => prev.filter(item => item.id !== profile.id));
       setSubmissions(prev => prev.filter(item => item.userId !== profile.uid && item.id !== profile.uid));
       setRegistrations(prev => prev
-        .filter(item => item.id !== ownedTeam?.id)
+        .filter(item => !deletedTeamIds.has(item.id))
         .map(item => {
-          if (!email) return item;
-          const nextMembers = (item.members || []).filter(member => normalizeEmail(member.email || '') !== email);
+          if (!deletedEmail) return item;
+          const nextMembers = (item.members || []).filter(member => normalizeEmail(member.email || '') !== deletedEmail);
           return nextMembers.length === (item.members || []).length ? item : { ...item, members: nextMembers, teamSize: nextMembers.length + 1 };
         }));
       sessionStorage.removeItem(ADMIN_CACHE_KEY);
-      setToastMessage('Database user records deleted.');
+      setToastMessage(authDeleteCompleted ? 'User account and records deleted.' : 'Database records deleted. Deploy functions to remove Firebase Auth login too.');
+      void refreshData(true);
     });
   };
 
@@ -999,7 +1299,10 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
 
   const navItems: Array<{ id: AdminTab; label: string; icon: ReactNode }> = [
     { id: 'overview', label: 'Overview', icon: <BarChart3 className="h-4 w-4" /> },
+    { id: 'landing', label: 'Landing Editor', icon: <Monitor className="h-4 w-4" /> },
+    { id: 'forms', label: 'Form Settings', icon: <FileText className="h-4 w-4" /> },
     { id: 'teams', label: 'Teams', icon: <Users className="h-4 w-4" /> },
+    { id: 'attendance', label: 'Attendance', icon: <CheckCircle2 className="h-4 w-4" /> },
     { id: 'judges', label: 'Judges', icon: <Gavel className="h-4 w-4" /> },
     { id: 'assignments', label: 'Assignments', icon: <ClipboardCheck className="h-4 w-4" /> },
     { id: 'reviews', label: 'Reviews', icon: <FileText className="h-4 w-4" /> },
@@ -1078,6 +1381,25 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
                 auditLogs={auditLogs}
               />
             )}
+            {activeTab === 'landing' && (
+              <LandingEditorTab
+                content={landingDraft}
+                selectedSectionId={selectedLandingSectionId}
+                setSelectedSectionId={setSelectedLandingSectionId}
+                onUpdateSection={updateLandingSection}
+                onAddSection={addLandingSection}
+                onRemoveSection={removeLandingSection}
+                onMoveSection={moveLandingSection}
+                onSave={saveLandingContent}
+              />
+            )}
+            {activeTab === 'forms' && (
+              <FormSettingsTab
+                settings={formDraft}
+                onChange={setFormDraft}
+                onSave={saveFormSettings}
+              />
+            )}
             {activeTab === 'teams' && (
               <TeamsTab
                 teams={filteredTeams}
@@ -1105,6 +1427,23 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
                 onDeleteMember={handleDeleteMember}
                 submissionByTeamId={submissionByTeamId}
                 reviewStatusForTeam={reviewStatusForTeam}
+              />
+            )}
+            {activeTab === 'attendance' && (
+              <AttendanceAdminTab
+                teams={registrations}
+                volunteers={volunteers}
+                lists={attendanceLists}
+                marks={attendanceMarks}
+                volunteerForm={volunteerForm}
+                setVolunteerForm={setVolunteerForm}
+                listForm={attendanceListForm}
+                setListForm={setAttendanceListForm}
+                onSaveVolunteer={saveVolunteer}
+                onSaveList={saveAttendanceList}
+                onToggleVolunteerList={toggleVolunteerList}
+                onToggleVolunteerActive={toggleVolunteerActive}
+                onToggleListActive={toggleAttendanceListActive}
               />
             )}
             {activeTab === 'judges' && (
@@ -1229,6 +1568,541 @@ function OverviewTab({
           {auditLogs.length === 0 && <EmptyState text="No admin activity yet." />}
         </div>
       </Panel>
+    </div>
+  );
+}
+
+function LandingEditorTab({
+  content,
+  selectedSectionId,
+  setSelectedSectionId,
+  onUpdateSection,
+  onAddSection,
+  onRemoveSection,
+  onMoveSection,
+  onSave,
+}: {
+  content: LandingEditorContent;
+  selectedSectionId: string;
+  setSelectedSectionId: (value: string) => void;
+  onUpdateSection: (sectionId: string, patch: Partial<LandingEditorSection>) => void;
+  onAddSection: () => void;
+  onRemoveSection: (sectionId: string) => void;
+  onMoveSection: (sectionId: string, direction: 'up' | 'down') => void;
+  onSave: () => void;
+}) {
+  const sections = [...content.sections].sort((a, b) => a.order - b.order);
+  const selectedSection = sections.find(section => section.id === selectedSectionId) || sections[0];
+  const visibleCount = sections.filter(section => section.visible).length;
+
+  if (!selectedSection) {
+    return (
+      <Panel title="Landing Page Editor" icon={<Monitor className="h-5 w-5" />}>
+        <button type="button" onClick={onAddSection} className="admin-primary-btn inline-flex items-center gap-2 px-4 py-3 text-sm">
+          <PlusCircle className="h-4 w-4" /> Add first section
+        </button>
+      </Panel>
+    );
+  }
+
+  return (
+    <>
+      <div className="xl:hidden">
+        <Panel title="Landing Editor" icon={<Monitor className="h-5 w-5" />}>
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+            <p className="text-sm font-semibold text-amber-900">Landing editor is available on desktop only.</p>
+            <p className="mt-2 text-sm font-medium leading-relaxed text-amber-800">
+              Use a larger screen to edit page sections, manage images, and preview layout changes.
+            </p>
+          </div>
+        </Panel>
+      </div>
+
+      <div className="hidden xl:grid xl:grid-cols-[300px_1fr_360px] xl:gap-5">
+        <Panel title="Sections" icon={<Monitor className="h-5 w-5" />}>
+          <div className="mb-4 grid grid-cols-2 gap-2">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Total</p>
+              <p className="text-2xl font-semibold text-slate-950">{sections.length}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Visible</p>
+              <p className="text-2xl font-semibold text-slate-950">{visibleCount}</p>
+            </div>
+          </div>
+
+          <div className="grid gap-2">
+            {sections.map(section => (
+              <button
+                key={section.id}
+                type="button"
+                onClick={() => setSelectedSectionId(section.id)}
+                className={`rounded-xl border p-3 text-left transition ${
+                  selectedSection.id === section.id
+                    ? 'border-slate-950 bg-slate-950 text-white'
+                    : 'border-slate-200 bg-white text-slate-700 hover:border-slate-400'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="line-clamp-1 text-sm font-semibold">{section.title}</p>
+                  {section.visible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4 opacity-50" />}
+                </div>
+                <p className={`mt-1 line-clamp-1 text-xs font-medium ${selectedSection.id === section.id ? 'text-slate-300' : 'text-slate-400'}`}>
+                  {section.eyebrow || 'No eyebrow'} • {section.layout}
+                </p>
+              </button>
+            ))}
+          </div>
+
+          <button type="button" onClick={onAddSection} className="admin-primary-btn mt-4 flex w-full items-center justify-center gap-2 py-3 text-sm">
+            <PlusCircle className="h-4 w-4" /> Add section
+          </button>
+        </Panel>
+
+        <Panel title="Edit Selected Section" icon={<FileText className="h-5 w-5" />}>
+          <div className="grid gap-4">
+            <div className="grid grid-cols-2 gap-3">
+              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                Eyebrow
+                <input className="admin-input" value={selectedSection.eyebrow} onChange={event => onUpdateSection(selectedSection.id, { eyebrow: event.target.value })} />
+              </label>
+              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                Layout
+                <select className="admin-input" value={selectedSection.layout} onChange={event => onUpdateSection(selectedSection.id, { layout: event.target.value as LandingSectionLayout })}>
+                  <option value="feature">Feature with media right</option>
+                  <option value="split">Media emphasis</option>
+                  <option value="banner">Text banner only</option>
+                </select>
+              </label>
+            </div>
+
+            <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+              Title
+              <input className="admin-input" value={selectedSection.title} onChange={event => onUpdateSection(selectedSection.id, { title: event.target.value })} />
+            </label>
+
+            <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+              Body
+              <textarea className="admin-input min-h-32 resize-y" value={selectedSection.body} onChange={event => onUpdateSection(selectedSection.id, { body: event.target.value })} />
+            </label>
+
+            <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+              Image URL
+              <input className="admin-input" value={selectedSection.imageUrl} onChange={event => onUpdateSection(selectedSection.id, { imageUrl: event.target.value })} placeholder="https://..." />
+            </label>
+
+            <div className="grid grid-cols-2 gap-3">
+              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                CTA Label
+                <input className="admin-input" value={selectedSection.ctaLabel} onChange={event => onUpdateSection(selectedSection.id, { ctaLabel: event.target.value })} />
+              </label>
+              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                CTA Link
+                <input className="admin-input" value={selectedSection.ctaHref} onChange={event => onUpdateSection(selectedSection.id, { ctaHref: event.target.value })} />
+              </label>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => onUpdateSection(selectedSection.id, { visible: !selectedSection.visible })} className="admin-secondary-btn inline-flex items-center gap-2 px-4 py-2 text-xs">
+                {selectedSection.visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {selectedSection.visible ? 'Hide section' : 'Show section'}
+              </button>
+              <button type="button" onClick={() => onMoveSection(selectedSection.id, 'up')} className="admin-secondary-btn inline-flex items-center gap-2 px-4 py-2 text-xs">
+                <ArrowUp className="h-4 w-4" /> Move up
+              </button>
+              <button type="button" onClick={() => onMoveSection(selectedSection.id, 'down')} className="admin-secondary-btn inline-flex items-center gap-2 px-4 py-2 text-xs">
+                <ArrowDown className="h-4 w-4" /> Move down
+              </button>
+              <button type="button" onClick={() => onRemoveSection(selectedSection.id)} className="mini-btn bg-red-50 text-red-700">
+                <Trash2 className="h-3 w-3" /> Delete
+              </button>
+            </div>
+
+            <button type="button" onClick={onSave} className="admin-primary-btn inline-flex w-fit items-center gap-2 px-5 py-3 text-sm">
+              <Save className="h-4 w-4" /> Publish changes
+            </button>
+          </div>
+        </Panel>
+
+        <div className="space-y-5">
+          <Panel title="Last Updated" icon={<ShieldCheck className="h-5 w-5" />}>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Published by</p>
+              <p className="mt-1 break-words text-sm font-semibold text-slate-950">{content.updatedBy || 'Not published yet'}</p>
+              {content.updatedByEmail && <p className="mt-1 break-all text-xs font-medium text-slate-500">{content.updatedByEmail}</p>}
+            </div>
+            <div className="mt-3 grid gap-3">
+              <Detail label="Time" value={formatDate(content.updatedAt) || 'Waiting for first publish'} />
+              <Detail label="Last section" value={content.updatedSection || 'No section recorded'} />
+            </div>
+          </Panel>
+
+          <Panel title="Live Preview" icon={<Eye className="h-5 w-5" />}>
+            <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              {selectedSection.imageUrl && selectedSection.layout !== 'banner' && (
+                <img src={selectedSection.imageUrl} alt="" className="h-40 w-full object-cover grayscale" />
+              )}
+              <div className="p-4">
+                <span className="inline-flex rounded-full bg-slate-950 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-white">{selectedSection.eyebrow || 'Event Update'}</span>
+                <h3 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">{selectedSection.title}</h3>
+                <p className="mt-2 text-sm font-medium leading-relaxed text-slate-600">{selectedSection.body}</p>
+                {selectedSection.ctaLabel && <p className="mt-4 text-sm font-semibold text-slate-950">{selectedSection.ctaLabel} →</p>}
+              </div>
+            </article>
+          </Panel>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function FormSettingsTab({
+  settings,
+  onChange,
+  onSave,
+}: {
+  settings: EventFormSettings;
+  onChange: (settings: EventFormSettings) => void;
+  onSave: () => void;
+}) {
+  const updateRegistration = (patch: Partial<EventFormSettings['registration']>) => {
+    onChange({ ...settings, registration: { ...settings.registration, ...patch } });
+  };
+  const updateDashboard = (patch: Partial<EventFormSettings['dashboard']>) => {
+    onChange({ ...settings, dashboard: { ...settings.dashboard, ...patch } });
+  };
+  const updateDomain = (id: string, patch: Partial<DashboardDomainSetting>) => {
+    updateDashboard({
+      domains: settings.dashboard.domains.map(domain => domain.id === id ? { ...domain, ...patch } : domain),
+    });
+  };
+  const updateSection = (key: IdeaSectionSetting['key'], patch: Partial<IdeaSectionSetting>) => {
+    updateDashboard({
+      sections: settings.dashboard.sections.map(section => section.key === key ? { ...section, ...patch } : section),
+    });
+  };
+  const updateLink = (key: LinkFieldSetting['key'], patch: Partial<LinkFieldSetting>) => {
+    updateDashboard({
+      links: settings.dashboard.links.map(link => link.key === key ? { ...link, ...patch } : link),
+    });
+  };
+
+  return (
+    <div className="space-y-5">
+      <Panel title="Registration Form" icon={<Users className="h-5 w-5" />}>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+            Eyebrow
+            <input className="admin-input" value={settings.registration.eyebrow} onChange={event => updateRegistration({ eyebrow: event.target.value })} />
+          </label>
+          <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+            Page title
+            <input className="admin-input" value={settings.registration.title} onChange={event => updateRegistration({ title: event.target.value })} />
+          </label>
+          <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+            Team sizes
+            <input
+              className="admin-input"
+              value={settings.registration.teamSizes.join(', ')}
+              onChange={event => updateRegistration({ teamSizes: event.target.value.split(',').map(item => Number(item.trim())).filter(Boolean) })}
+              placeholder="3, 4, 5"
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+            Submit button
+            <input className="admin-input" value={settings.registration.submitLabel} onChange={event => updateRegistration({ submitLabel: event.target.value })} />
+          </label>
+          <label className="grid gap-1.5 text-sm font-semibold text-slate-700 lg:col-span-2">
+            Idea stages
+            <textarea
+              className="admin-input min-h-24"
+              value={settings.registration.ideaStages.join('\n')}
+              onChange={event => updateRegistration({ ideaStages: event.target.value.split('\n').map(item => item.trim()).filter(Boolean) })}
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm font-semibold text-slate-700 lg:col-span-2">
+            Declaration text
+            <textarea className="admin-input min-h-28" value={settings.registration.declaration} onChange={event => updateRegistration({ declaration: event.target.value })} />
+          </label>
+        </div>
+      </Panel>
+
+      <Panel title="Dashboard Copy and Domains" icon={<FileText className="h-5 w-5" />}>
+        <div className="grid gap-4">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+              Dashboard title
+              <input className="admin-input" value={settings.dashboard.title} onChange={event => updateDashboard({ title: event.target.value })} />
+            </label>
+            <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
+              <input type="checkbox" checked={settings.dashboard.requireDomain} onChange={event => updateDashboard({ requireDomain: event.target.checked })} />
+              Require domain selection
+            </label>
+          </div>
+          <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+            Dashboard subtitle
+            <textarea className="admin-input min-h-24" value={settings.dashboard.subtitle} onChange={event => updateDashboard({ subtitle: event.target.value })} />
+          </label>
+          <div className="grid gap-3 md:grid-cols-2">
+            {settings.dashboard.domains.map(domain => (
+              <div key={domain.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                <label className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase text-slate-500">
+                  <input type="checkbox" checked={domain.enabled} onChange={event => updateDomain(domain.id, { enabled: event.target.checked })} />
+                  Enabled
+                </label>
+                <input className="admin-input" value={domain.title} onChange={event => updateDomain(domain.id, { title: event.target.value })} />
+                <textarea className="admin-input mt-2 min-h-20" value={domain.description} onChange={event => updateDomain(domain.id, { description: event.target.value })} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </Panel>
+
+      <Panel title="Idea Submission Sections" icon={<ClipboardCheck className="h-5 w-5" />}>
+        <div className="grid gap-3">
+          {settings.dashboard.sections.map(section => (
+            <div key={section.key} className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 xl:grid-cols-[1fr_120px_100px_160px]">
+              <div className="grid gap-2">
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-2 text-xs font-semibold uppercase text-slate-500">
+                    <input type="checkbox" checked={section.enabled} onChange={event => updateSection(section.key, { enabled: event.target.checked })} />
+                    Show
+                  </label>
+                  <label className="flex items-center gap-2 text-xs font-semibold uppercase text-slate-500">
+                    <input type="checkbox" checked={section.required} onChange={event => updateSection(section.key, { required: event.target.checked })} />
+                    Required
+                  </label>
+                  <span className="font-mono text-xs font-semibold text-slate-400">{section.key}</span>
+                </div>
+                <input className="admin-input" value={section.title} onChange={event => updateSection(section.key, { title: event.target.value })} />
+                <textarea className="admin-input min-h-20" value={section.placeholder} onChange={event => updateSection(section.key, { placeholder: event.target.value })} />
+              </div>
+              <label className="grid gap-1.5 text-xs font-semibold uppercase text-slate-500">
+                Limit
+                <input className="admin-input" type="number" value={section.limit} onChange={event => updateSection(section.key, { limit: Number(event.target.value) || 100 })} />
+              </label>
+              <label className="grid gap-1.5 text-xs font-semibold uppercase text-slate-500">
+                Rows
+                <input className="admin-input" type="number" value={section.rows} onChange={event => updateSection(section.key, { rows: Number(event.target.value) || 3 })} />
+              </label>
+              <div className="flex items-center text-xs font-semibold text-slate-500">
+                Visible on team dashboard
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Attachment Fields" icon={<ExternalLink className="h-5 w-5" />}>
+        <div className="grid gap-3 md:grid-cols-3">
+          {settings.dashboard.links.map(link => (
+            <div key={link.key} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="mb-3 flex flex-wrap gap-3">
+                <label className="flex items-center gap-2 text-xs font-semibold uppercase text-slate-500">
+                  <input type="checkbox" checked={link.enabled} onChange={event => updateLink(link.key, { enabled: event.target.checked })} />
+                  Show
+                </label>
+                <label className="flex items-center gap-2 text-xs font-semibold uppercase text-slate-500">
+                  <input type="checkbox" checked={link.required} onChange={event => updateLink(link.key, { required: event.target.checked })} />
+                  Required
+                </label>
+              </div>
+              <input className="admin-input" value={link.title} onChange={event => updateLink(link.key, { title: event.target.value })} />
+              <input className="admin-input mt-2" value={link.placeholder} onChange={event => updateLink(link.key, { placeholder: event.target.value })} />
+              <input className="admin-input mt-2" type="number" value={link.limit} onChange={event => updateLink(link.key, { limit: Number(event.target.value) || 250 })} />
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <div className="sticky bottom-4 z-10 flex justify-end">
+        <button type="button" onClick={onSave} className="admin-primary-btn inline-flex items-center gap-2 px-6 py-3 text-sm shadow-lg">
+          <Save className="h-4 w-4" /> Publish form settings
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AttendanceAdminTab({
+  teams,
+  volunteers,
+  lists,
+  marks,
+  volunteerForm,
+  setVolunteerForm,
+  listForm,
+  setListForm,
+  onSaveVolunteer,
+  onSaveList,
+  onToggleVolunteerList,
+  onToggleVolunteerActive,
+  onToggleListActive,
+}: {
+  teams: StoredRegistration[];
+  volunteers: Volunteer[];
+  lists: AttendanceList[];
+  marks: AttendanceMark[];
+  volunteerForm: Omit<Volunteer, 'id'>;
+  setVolunteerForm: (value: Omit<Volunteer, 'id'>) => void;
+  listForm: Omit<AttendanceList, 'id'>;
+  setListForm: (value: Omit<AttendanceList, 'id'>) => void;
+  onSaveVolunteer: (event: FormEvent) => void;
+  onSaveList: (event: FormEvent) => void;
+  onToggleVolunteerList: (volunteer: Volunteer, listId: string) => void;
+  onToggleVolunteerActive: (volunteer: Volunteer) => void;
+  onToggleListActive: (list: AttendanceList) => void;
+}) {
+  const activeLists = lists.filter(list => list.active);
+  const marksByList = marks.reduce<Record<string, AttendanceMark[]>>((acc, mark) => {
+    acc[mark.listId] = [...(acc[mark.listId] || []), mark];
+    return acc;
+  }, {});
+  const liveTeamIds = new Set(marks.map(mark => mark.teamId));
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-4 md:grid-cols-4">
+        <StatCard label="Checkpoints" value={lists.length} icon={<CheckCircle2 className="h-5 w-5" />} />
+        <StatCard label="Open" value={activeLists.length} icon={<ClipboardCheck className="h-5 w-5" />} />
+        <StatCard label="Volunteers" value={volunteers.length} icon={<UserPlus className="h-5 w-5" />} />
+        <StatCard label="Live Teams" value={liveTeamIds.size} icon={<Users className="h-5 w-5" />} />
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+        <Panel title="Create Attendance Checkpoint" icon={<CheckCircle2 className="h-5 w-5" />}>
+          <form onSubmit={onSaveList} className="grid gap-3">
+            <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+              Section name
+              <input className="admin-input" value={listForm.title} onChange={event => setListForm({ ...listForm, title: event.target.value })} placeholder="Food counter, Entry, GMC, Session 1" />
+            </label>
+            <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+              Volunteer note
+              <textarea className="admin-input min-h-24" value={listForm.description || ''} onChange={event => setListForm({ ...listForm, description: event.target.value })} placeholder="What should the volunteer verify here?" />
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                Color
+                <select className="admin-input" value={listForm.color || 'mint'} onChange={event => setListForm({ ...listForm, color: event.target.value as AttendanceList['color'] })}>
+                  <option value="mint">Mint</option>
+                  <option value="purple">Purple</option>
+                  <option value="yellow">Yellow</option>
+                  <option value="white">White</option>
+                </select>
+              </label>
+              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
+                <input type="checkbox" checked={listForm.active} onChange={event => setListForm({ ...listForm, active: event.target.checked })} />
+                Open for marking
+              </label>
+            </div>
+            <button type="submit" className="admin-primary-btn inline-flex items-center justify-center gap-2 py-3 text-sm">
+              <PlusCircle className="h-4 w-4" /> Save checkpoint
+            </button>
+          </form>
+        </Panel>
+
+        <Panel title="Assign Volunteer" icon={<UserPlus className="h-5 w-5" />}>
+          <form onSubmit={onSaveVolunteer} className="grid gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                Name
+                <input className="admin-input" value={volunteerForm.name} onChange={event => setVolunteerForm({ ...volunteerForm, name: event.target.value })} placeholder="Volunteer name" />
+              </label>
+              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                Login email
+                <input className="admin-input" value={volunteerForm.email} onChange={event => setVolunteerForm({ ...volunteerForm, email: event.target.value })} placeholder="volunteer@gmail.com" />
+              </label>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Allowed sections</p>
+              <div className="flex flex-wrap gap-2">
+                {lists.map(list => (
+                  <label key={list.id} className={`inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold ${volunteerForm.allowedListIds.includes(list.id) ? 'border-slate-950 bg-slate-950 text-white' : 'border-slate-200 bg-white text-slate-700'}`}>
+                    <input
+                      type="checkbox"
+                      className="sr-only"
+                      checked={volunteerForm.allowedListIds.includes(list.id)}
+                      onChange={() => setVolunteerForm({
+                        ...volunteerForm,
+                        allowedListIds: volunteerForm.allowedListIds.includes(list.id)
+                          ? volunteerForm.allowedListIds.filter(id => id !== list.id)
+                          : [...volunteerForm.allowedListIds, list.id],
+                      })}
+                    />
+                    {list.title}
+                  </label>
+                ))}
+                {lists.length === 0 && <p className="text-sm font-medium text-slate-500">Create a checkpoint first.</p>}
+              </div>
+            </div>
+            <button type="submit" className="admin-primary-btn inline-flex items-center justify-center gap-2 py-3 text-sm">
+              <Save className="h-4 w-4" /> Save volunteer
+            </button>
+          </form>
+        </Panel>
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
+        <Panel title="Volunteer Permissions" icon={<Users className="h-5 w-5" />}>
+          <div className="grid gap-3">
+            {volunteers.map(volunteer => (
+              <div key={volunteer.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-slate-950">{volunteer.name || volunteer.email}</p>
+                    <p className="mt-1 break-all font-mono text-xs font-medium text-slate-500">{volunteer.email}</p>
+                  </div>
+                  <button type="button" onClick={() => onToggleVolunteerActive(volunteer)} className={`mini-btn ${volunteer.active ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                    {volunteer.active ? 'Active' : 'Disabled'}
+                  </button>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {lists.map(list => {
+                    const checked = volunteer.allowedListIds.includes(list.id);
+                    return (
+                      <button key={list.id} type="button" onClick={() => onToggleVolunteerList(volunteer, list.id)} className={`mini-btn ${checked ? 'bg-slate-950 text-white' : 'bg-white'}`}>
+                        {checked ? '✓ ' : ''}{list.title}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            {volunteers.length === 0 && <EmptyState text="No volunteers assigned yet." />}
+          </div>
+        </Panel>
+
+        <Panel title="Attendance Dashboard" icon={<BarChart3 className="h-5 w-5" />}>
+          <div className="grid gap-3">
+            {lists.map(list => {
+              const listMarks = marksByList[list.id] || [];
+              return (
+                <div key={list.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-slate-950">{list.title}</p>
+                      <p className="mt-1 text-xs font-medium text-slate-500">{list.description || 'No note'} • {listMarks.length}/{teams.length} teams marked</p>
+                    </div>
+                    <button type="button" onClick={() => onToggleListActive(list)} className={`mini-btn ${list.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                      {list.active ? 'Open' : 'Closed'}
+                    </button>
+                  </div>
+                  <div className="mt-3 max-h-40 overflow-y-auto rounded-xl bg-slate-50 p-2">
+                    {listMarks.slice(0, 12).map(mark => (
+                      <div key={mark.id} className="flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-xs font-semibold text-slate-700">
+                        <span className="truncate">{mark.teamName}</span>
+                        <span className="flex-none text-slate-400">{formatDate(mark.createdAt) || 'marked'}</span>
+                      </div>
+                    ))}
+                    {listMarks.length === 0 && <p className="p-2 text-sm font-medium text-slate-500">No teams marked yet.</p>}
+                  </div>
+                </div>
+              );
+            })}
+            {lists.length === 0 && <EmptyState text="Create attendance lists like Food, Entry, GMC, or Session 1." />}
+          </div>
+        </Panel>
+      </div>
     </div>
   );
 }
@@ -1717,9 +2591,6 @@ function UsersTab({
   return (
     <div className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
       <Panel title="Logged-In Accounts" icon={<UserCheck className="h-5 w-5" />}>
-        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold leading-relaxed text-amber-800">
-          Browser apps can delete Firestore database records. Deleting the actual Firebase Auth account requires a backend Admin SDK or Cloud Function.
-        </div>
         <div className="grid gap-3">
           {userProfiles.map(profile => {
             const ownedTeam = teams.find(team => team.userId === profile.uid);
@@ -1746,7 +2617,7 @@ function UsersTab({
                     </>
                   )}
                   <button type="button" onClick={() => onDeleteUser(profile)} className="mini-btn bg-red-50 text-red-700">
-                    <Trash2 className="h-3 w-3" /> Delete login record
+                    <Trash2 className="h-3 w-3" /> Delete account
                   </button>
                 </div>
               </div>

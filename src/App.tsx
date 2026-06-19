@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowRight, Bell, CheckCircle2, Ticket, X } from 'lucide-react';
 import { User as FirebaseUser, onAuthStateChanged } from 'firebase/auth';
-import { collection, doc, getDoc, getDocs, limit, orderBy, query, runTransaction, serverTimestamp, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, setDoc } from 'firebase/firestore';
 
 import Navbar from './components/Navbar';
 import Hero from './components/Hero';
@@ -30,13 +30,16 @@ import RegistrationPage from './components/RegistrationPage';
 import BadgePreviewPage from './components/BadgePreviewPage';
 import TeamDashboard from './components/TeamDashboard';
 import JudgeReviewPanel from './components/JudgeReviewPanel';
+import VolunteerPanel from './components/VolunteerPanel';
 import FullScreenVideoLoader from './components/FullScreenVideoLoader';
 import PasswordResetPage from './components/PasswordResetPage';
+import DynamicLandingSections from './components/DynamicLandingSections';
 import { Registration } from './types';
 import { adminEmail, auth, db } from './lib/firebase';
 import { LOADER_CYCLE_MS } from './loaderConfig';
+import { defaultLandingContent, LandingEditorContent, landingContentCollection, landingContentDocId, normalizeLandingContent } from './lib/landingContent';
 
-type Page = 'home' | 'register' | 'admin' | 'badge' | 'dashboard' | 'judge' | 'reset-password';
+type Page = 'home' | 'register' | 'admin' | 'badge' | 'dashboard' | 'judge' | 'volunteer' | 'profile' | 'reset-password';
 
 interface WebAnnouncement {
   id: string;
@@ -57,6 +60,8 @@ const pageFromPath = (): Page => {
   if (window.location.pathname === '/badge') return 'badge';
   if (window.location.pathname === '/dashboard') return 'dashboard';
   if (window.location.pathname === '/judge') return 'judge';
+  if (window.location.pathname === '/volunteer') return 'volunteer';
+  if (window.location.pathname === '/profile' || window.location.pathname === '/profil') return 'profile';
   return 'home';
 };
 
@@ -66,6 +71,8 @@ const pathForPage = (page: Page) => {
   if (page === 'badge') return '/badge';
   if (page === 'dashboard') return '/dashboard';
   if (page === 'judge') return '/judge';
+  if (page === 'volunteer') return '/volunteer';
+  if (page === 'profile') return '/profile';
   if (page === 'reset-password') return '/reset-password';
   return '/';
 };
@@ -75,6 +82,7 @@ const teamNameDocId = (teamName: string) => encodeURIComponent(normalizeTeamName
 const normalizeEmail = (email: string) => email.trim().toLowerCase();
 const emailDocId = (email: string) => encodeURIComponent(normalizeEmail(email));
 const judgeDocId = (email: string) => normalizeEmail(email);
+const volunteerDocId = (email: string) => normalizeEmail(email);
 const hiddenAnnouncementKey = (uid: string) => `shifa-sdg-hidden-announcements-${uid}`;
 const saveSessionUserProfile = async (user: FirebaseUser) => {
   await setDoc(doc(db, 'userProfiles', user.uid), {
@@ -101,6 +109,7 @@ export default function App() {
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [, refreshProfileHeader] = useState(0);
   const [authReady, setAuthReady] = useState(false);
   const [bootLoaderDone, setBootLoaderDone] = useState(false);
   const [handoffLoaderLabel, setHandoffLoaderLabel] = useState('');
@@ -110,8 +119,10 @@ export default function App() {
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [isFirestoreAdmin, setIsFirestoreAdmin] = useState(false);
   const [isJudge, setIsJudge] = useState(false);
+  const [isVolunteer, setIsVolunteer] = useState(false);
   const [webAnnouncements, setWebAnnouncements] = useState<WebAnnouncement[]>([]);
   const [hiddenAnnouncementIds, setHiddenAnnouncementIds] = useState<string[]>([]);
+  const [landingContent, setLandingContent] = useState<LandingEditorContent>(defaultLandingContent);
 
   const isAdmin = Boolean(
     currentUser?.email && adminEmail && currentUser.email.toLowerCase() === adminEmail
@@ -174,6 +185,30 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
 
+    const checkVolunteerRole = async () => {
+      if (!currentUser?.email) {
+        setIsVolunteer(false);
+        return;
+      }
+
+      try {
+        const volunteerSnapshot = await getDoc(doc(db, 'volunteers', volunteerDocId(currentUser.email)));
+        const volunteerData = volunteerSnapshot.data() as { active?: boolean } | undefined;
+        if (!cancelled) setIsVolunteer(volunteerSnapshot.exists() && volunteerData?.active !== false);
+      } catch {
+        if (!cancelled) setIsVolunteer(false);
+      }
+    };
+
+    void checkVolunteerRole();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser]);
+
+  useEffect(() => {
+    let cancelled = false;
+
     const checkJudgeRole = async () => {
       if (!currentUser?.email) {
         setIsJudge(false);
@@ -198,6 +233,18 @@ export default function App() {
   useEffect(() => {
     const timer = window.setTimeout(() => setBootLoaderDone(true), LOADER_CYCLE_MS);
     return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      doc(db, landingContentCollection, landingContentDocId),
+      snapshot => {
+        setLandingContent(snapshot.exists() ? normalizeLandingContent(snapshot.data() as LandingEditorContent) : defaultLandingContent);
+      },
+      () => setLandingContent(defaultLandingContent),
+    );
+
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -226,16 +273,22 @@ export default function App() {
     if (currentUser && openDashboardAfterAuth && !openRegistrationAfterAuth) {
       setIsAuthModalOpen(false);
       playHandoffLoader('Opening team dashboard');
-      navigateTo('dashboard');
+      navigateTo(isVolunteer && !isAdmin && !isJudge ? 'volunteer' : 'dashboard');
       setOpenDashboardAfterAuth(false);
     }
-  }, [currentUser, openDashboardAfterAuth, openRegistrationAfterAuth]);
+  }, [currentUser, isAdmin, isJudge, isVolunteer, openDashboardAfterAuth, openRegistrationAfterAuth]);
 
   useEffect(() => {
     if (currentUser && isJudge && !isAdmin && page !== 'judge') {
       navigateTo('judge');
     }
   }, [currentUser, isAdmin, isJudge, page]);
+
+  useEffect(() => {
+    if (currentUser && isVolunteer && !isAdmin && !isJudge && page !== 'volunteer') {
+      navigateTo('volunteer');
+    }
+  }, [currentUser, isAdmin, isJudge, isVolunteer, page]);
 
   useEffect(() => {
     let cancelled = false;
@@ -311,11 +364,19 @@ export default function App() {
       navigateTo('judge');
       return;
     }
+    if (isVolunteer && !isAdmin) {
+      navigateTo('volunteer');
+      return;
+    }
     playHandoffLoader('Opening team dashboard');
     navigateTo('dashboard');
   };
 
   const openRegistration = () => {
+    if (isVolunteer && !isAdmin) {
+      navigateTo('volunteer');
+      return;
+    }
     if (isJudge && !isAdmin) {
       navigateTo('judge');
       return;
@@ -326,6 +387,25 @@ export default function App() {
       return;
     }
     navigateTo('register');
+  };
+
+  const openProfile = () => {
+    if (!currentUser) {
+      openAuth('signin', false);
+      return;
+    }
+
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      navigateTo('profile');
+      return;
+    }
+
+    setIsProfileOpen(true);
+  };
+
+  const refreshProfile = () => {
+    setCurrentUser(auth.currentUser);
+    refreshProfileHeader(value => value + 1);
   };
 
   const hideAnnouncement = (id: string) => {
@@ -435,12 +515,12 @@ export default function App() {
     }, 6000);
   };
 
-  const activeWebAnnouncement = page !== 'dashboard' && page !== 'admin' && page !== 'judge'
+  const activeWebAnnouncement = page !== 'dashboard' && page !== 'admin' && page !== 'judge' && page !== 'volunteer'
     ? webAnnouncements.find(item => !hiddenAnnouncementIds.includes(item.id))
     : undefined;
 
   return (
-    <div className="min-h-screen bg-white text-[#191A23] overflow-x-hidden font-sans antialiased custom-scrollbar selection:bg-[#B9FF66] selection:text-[#191A23]">
+    <div className="theme-shell min-h-screen bg-white text-[#191A23] overflow-x-hidden font-sans antialiased custom-scrollbar selection:bg-[#B9FF66] selection:text-[#191A23]">
       {/* Dynamic Success notifications once booking completes */}
       <AnimatePresence>
         {(!authReady || !bootLoaderDone) && (
@@ -482,19 +562,25 @@ export default function App() {
       </AnimatePresence>
 
       {/* Primary headers */}
-      <Navbar
-        onRegisterClick={openRegistration}
-        onAdminClick={() => navigateTo('admin')}
-        onJudgeClick={() => navigateTo('judge')}
-        onDashboardClick={openDashboard}
-        onHomeClick={() => navigateTo('home')}
-        isLoggedIn={Boolean(currentUser)}
-        isAdmin={isAdmin}
-        isJudge={isJudge && !isAdmin}
-        userEmail={currentUser?.email}
-        onAuthClick={() => openAuth('signin')}
-        onProfileClick={() => setIsProfileOpen(true)}
-      />
+      {!(isProfileOpen || page === 'profile') && (
+        <Navbar
+          onRegisterClick={openRegistration}
+          onAdminClick={() => navigateTo('admin')}
+          onJudgeClick={() => navigateTo('judge')}
+          onVolunteerClick={() => navigateTo('volunteer')}
+          onDashboardClick={openDashboard}
+          onHomeClick={() => isVolunteer && !isAdmin && !isJudge ? navigateTo('volunteer') : navigateTo('home')}
+          isLoggedIn={Boolean(currentUser)}
+          isAdmin={isAdmin}
+          isJudge={isJudge && !isAdmin}
+          isVolunteer={isVolunteer && !isAdmin && !isJudge}
+          userEmail={currentUser?.email}
+          userDisplayName={currentUser?.displayName}
+          userPhotoURL={currentUser?.photoURL}
+          onAuthClick={() => openAuth('signin')}
+          onProfileClick={() => isVolunteer && !isAdmin && !isJudge ? navigateTo('volunteer') : openProfile()}
+        />
+      )}
 
       <AnimatePresence>
         {activeWebAnnouncement && (
@@ -558,10 +644,28 @@ export default function App() {
           onBack={() => isJudge && !isAdmin ? navigateTo('judge') : navigateTo('home')}
           onLogin={() => openAuth('signin', false)}
         />
+      ) : page === 'volunteer' ? (
+        <VolunteerPanel
+          user={currentUser}
+          isAdmin={isAdmin}
+          isVolunteer={isVolunteer}
+          onBack={() => navigateTo('home')}
+          onLogin={() => openAuth('signin', false)}
+        />
       ) : page === 'reset-password' ? (
         <PasswordResetPage
           onBack={() => navigateTo('home')}
           onLogin={() => openAuth('signin')}
+        />
+      ) : page === 'profile' ? (
+        <ProfilePanel
+          isOpen
+          presentation="page"
+          user={currentUser}
+          onLogin={() => openAuth('signin', false)}
+          onProfileUpdated={refreshProfile}
+          onDashboardClick={openDashboard}
+          onClose={() => navigateTo('home')}
         />
       ) : page === 'badge' ? (
         <BadgePreviewPage
@@ -573,6 +677,8 @@ export default function App() {
       <main>
         {/* Hero Banner Section */}
         <Hero onRegisterClick={openRegistration} />
+
+        <DynamicLandingSections content={landingContent} />
 
         {/* Dynamic Video Showcase Section */}
         <ProductVideos />
@@ -610,7 +716,7 @@ export default function App() {
       )}
 
       {/* Global standard Footer */}
-      <Footer />
+      {!(page === 'volunteer' && isVolunteer && !isAdmin && !isJudge) && <Footer />}
 
       <AuthModal
         isOpen={isAuthModalOpen}
@@ -625,6 +731,11 @@ export default function App() {
       <ProfilePanel
         isOpen={isProfileOpen}
         user={currentUser}
+        onProfileUpdated={refreshProfile}
+        onDashboardClick={() => {
+          setIsProfileOpen(false);
+          openDashboard();
+        }}
         onClose={() => setIsProfileOpen(false)}
       />
     </div>
