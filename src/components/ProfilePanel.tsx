@@ -182,7 +182,6 @@ export default function ProfilePanel({ isOpen, user, onClose, onProfileUpdated, 
 
     await updateProfile(user, {
       displayName: nextDisplayName || null,
-      photoURL: selectedAvatar?.url || null,
     });
 
     await setDoc(doc(db, 'userProfiles', user.uid), {
