@@ -38,6 +38,7 @@ import { Registration } from './types';
 import { adminEmail, auth, db } from './lib/firebase';
 import { LOADER_CYCLE_MS } from './loaderConfig';
 import { defaultLandingContent, LandingEditorContent, landingContentCollection, landingContentDocId, normalizeLandingContent } from './lib/landingContent';
+import { getAvatarById, getAvatarByUrl, getFallbackAvatar } from './lib/profileAvatars';
 
 type Page = 'home' | 'register' | 'admin' | 'badge' | 'dashboard' | 'judge' | 'volunteer' | 'profile' | 'reset-password';
 
@@ -89,7 +90,6 @@ const saveSessionUserProfile = async (user: FirebaseUser) => {
     uid: user.uid,
     email: user.email || '',
     displayName: user.displayName || '',
-    photoURL: user.photoURL || '',
     providerIds: user.providerData.map(provider => provider.providerId),
     lastSeenAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -120,6 +120,7 @@ export default function App() {
   const [isFirestoreAdmin, setIsFirestoreAdmin] = useState(false);
   const [isJudge, setIsJudge] = useState(false);
   const [isVolunteer, setIsVolunteer] = useState(false);
+  const [headerPhotoURL, setHeaderPhotoURL] = useState<string | null>(null);
   const [webAnnouncements, setWebAnnouncements] = useState<WebAnnouncement[]>([]);
   const [hiddenAnnouncementIds, setHiddenAnnouncementIds] = useState<string[]>([]);
   const [landingContent, setLandingContent] = useState<LandingEditorContent>(defaultLandingContent);
@@ -137,6 +138,31 @@ export default function App() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setHeaderPhotoURL(null);
+      return;
+    }
+
+    const fallbackAvatar = getFallbackAvatar(currentUser.uid);
+    const authAvatar = getAvatarByUrl(currentUser.photoURL) || fallbackAvatar;
+    setHeaderPhotoURL(authAvatar?.url || currentUser.photoURL || null);
+
+    const unsubscribe = onSnapshot(
+      doc(db, 'userProfiles', currentUser.uid),
+      snapshot => {
+        const profile = snapshot.data() as { avatarId?: string; photoURL?: string } | undefined;
+        const profileAvatar = getAvatarById(profile?.avatarId) || getAvatarByUrl(profile?.photoURL);
+        setHeaderPhotoURL(profileAvatar?.url || authAvatar?.url || currentUser.photoURL || null);
+      },
+      () => {
+        setHeaderPhotoURL(authAvatar?.url || currentUser.photoURL || null);
+      },
+    );
+
+    return unsubscribe;
+  }, [currentUser]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -576,7 +602,7 @@ export default function App() {
           isVolunteer={isVolunteer && !isAdmin && !isJudge}
           userEmail={currentUser?.email}
           userDisplayName={currentUser?.displayName}
-          userPhotoURL={currentUser?.photoURL}
+          userPhotoURL={headerPhotoURL}
           onAuthClick={() => openAuth('signin')}
           onProfileClick={() => isVolunteer && !isAdmin && !isJudge ? navigateTo('volunteer') : openProfile()}
         />

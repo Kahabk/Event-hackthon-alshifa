@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+
 interface AppleStyleAvatarProps {
   size?: 'sm' | 'md' | 'lg';
   variant?: 'purple' | 'peach' | 'mint' | 'gold' | 'rose' | 'admin';
@@ -17,10 +19,16 @@ export default function AppleStyleAvatar({
   imageUrl,
   className = '',
 }: AppleStyleAvatarProps) {
-  if (imageUrl) {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [imageUrl]);
+
+  if (imageUrl && !imageFailed) {
     return (
       <span className={`apple-avatar apple-avatar-photo ${sizeClass[size]} ${className}`} aria-hidden="true">
-        <img src={imageUrl} alt="" />
+        <img src={imageUrl} alt="" onError={() => setImageFailed(true)} />
       </span>
     );
   }
