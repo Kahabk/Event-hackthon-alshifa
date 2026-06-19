@@ -133,3 +133,42 @@ export interface IdeaSubmission {
   createdAt?: unknown;
   updatedAt?: unknown;
 }
+
+export interface Volunteer {
+  id: string;
+  name: string;
+  email: string;
+  active: boolean;
+  allowedListIds: string[];
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface AttendanceList {
+  id: string;
+  title: string;
+  description?: string;
+  active: boolean;
+  color?: 'mint' | 'purple' | 'yellow' | 'white';
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface AttendanceMark {
+  id: string;
+  listId: string;
+  listTitle: string;
+  teamId: string;
+  registrationId?: string;
+  teamName: string;
+  leaderName: string;
+  collegeName?: string;
+  location?: string;
+  teamSize?: number;
+  members?: TeamMember[];
+  markedByUid: string;
+  markedByEmail: string;
+  markedByName?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}

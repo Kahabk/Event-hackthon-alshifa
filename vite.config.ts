@@ -13,7 +13,7 @@ export default defineConfig(() => {
     },
     server: {
       allowedHosts: [
-        'distributor-money-thereof-perfectly.trycloudflare.com',
+        'offerings-brake-environmental-point.trycloudflare.com',
         '6290-150-107-212-194.ngrok-free.app',
       ],
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

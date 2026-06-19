@@ -82,6 +82,7 @@ VITE_FIREBASE_PROJECT_ID=
 VITE_FIREBASE_STORAGE_BUCKET=
 VITE_FIREBASE_MESSAGING_SENDER_ID=
 VITE_FIREBASE_APP_ID=
+VITE_FIREBASE_FUNCTIONS_REGION=
 VITE_ADMIN_EMAIL=
 ```
 
@@ -121,9 +122,12 @@ npm run clean     # Remove generated build/server files
 1. Create a Firebase project.
 2. Enable Authentication providers used by the event.
 3. Enable Cloud Firestore.
-4. Add the Firebase web app config to `.env.local`.
-5. Publish `firestore.rules` to your Firebase project.
-6. Set `VITE_ADMIN_EMAIL` to the primary admin email.
+4. Enable Cloud Functions.
+5. Add the Firebase web app config to `.env.local`.
+6. Publish `firestore.rules` to your Firebase project.
+7. Set `VITE_ADMIN_EMAIL` to the primary admin email.
+8. Copy `functions/.env.example` to `functions/.env` and set `ADMIN_EMAIL` to the same primary admin email.
+9. Deploy the backend with `firebase deploy --only functions`.
 
 Firestore collections used by the app include:
 
@@ -155,7 +159,7 @@ After a team registers, the app generates a verified team banner containing:
 - Selected innovation track
 - Team size
 
-Participants can access and download the banner later from the Profile panel.
+Participants can access and download the QR pass later from the Profile panel.
 
 ## Admin and Judge Access
 
@@ -171,6 +175,6 @@ Production assets are generated in `dist/`.
 
 ## Notes
 
-- Keep `banar.png`, `regster_badge.png`, and other required assets in the repository so builds and README previews render correctly.
+- Keep `banar.png`, `fest_image.png`, and other required assets in the repository so builds and README previews render correctly.
 - Firestore rules must be deployed for registration, dashboard, admin, and judge workflows to work in production.
 - The frontend should never contain private API keys. Use server-side functions for AI or privileged operations.
