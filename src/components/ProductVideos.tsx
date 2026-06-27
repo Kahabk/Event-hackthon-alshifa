@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState } from 'react';
 import { Play, Pause, RotateCcw, Volume2, VolumeX } from 'lucide-react';
 
 interface VideoItem {
@@ -37,21 +37,15 @@ function SingleVideoPlayer({ video }: { video: VideoItem; key?: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [playCount, setPlayCount] = useState(1);
 
-  useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.play().catch((err) => {
-        console.log('Autoplay deferred:', err);
-      });
-    }
-  }, []);
-
   const handleEnded = () => {
     if (playCount < 3) {
       setPlayCount((prev) => prev + 1);
       if (videoRef.current) {
         videoRef.current.currentTime = 0;
-        videoRef.current.play().catch((err) => {
-          console.error('Video replay error:', err);
+        videoRef.current.play().catch((error: DOMException) => {
+          if (error.name !== 'AbortError' && error.name !== 'NotAllowedError') {
+            console.error('Video replay error:', error);
+          }
         });
       }
     }

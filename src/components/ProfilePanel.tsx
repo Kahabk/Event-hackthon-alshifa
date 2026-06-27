@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { updateProfile, signOut, User as FirebaseUser } from 'firebase/auth';
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { ArrowLeft, Check, Download, GraduationCap, Home, LayoutDashboard, Loader2, LogOut, Mail, MapPin, Phone, QrCode, Save, User, VenusAndMars, X } from 'lucide-react';
-import { auth, db } from '../lib/firebase';
+import { auth, db, functions } from '../lib/firebase';
 import { getAvatarById, getAvatarByUrl, getFallbackAvatar, profileAvatars } from '../lib/profileAvatars';
 import { AccountRegistration, Registration } from '../types';
 import {
@@ -31,6 +32,13 @@ interface StoredUserProfile {
   pinCode?: string;
   gender?: 'male' | 'female' | '';
 }
+
+const ensureRegistrationTicket = httpsCallable<undefined, {
+  teamId: string;
+  ticketId: string;
+  ticketVersion: number;
+  registrationId: string;
+}>(functions, 'ensureRegistrationTicket');
 
 export default function ProfilePanel({ isOpen, user, onClose, onProfileUpdated, presentation = 'modal', onLogin, onDashboardClick }: ProfilePanelProps) {
   const [displayName, setDisplayName] = useState(user?.displayName || '');
@@ -122,13 +130,22 @@ export default function ProfilePanel({ isOpen, user, onClose, onProfileUpdated, 
         const summaryRegistration = accountData.registrationSummary
           ? ({ ...accountData.registrationSummary, teamNameKey: accountData.registrationSummary.teamNameKey || teamDocId } as Registration)
           : null;
-        const nextRegistration = dbRegistration || summaryRegistration;
+        let nextRegistration = dbRegistration || summaryRegistration;
 
         if (!active) return;
 
         if (!nextRegistration) {
           setBannerStatus('Team registration was found, but the banner details are not available yet.');
           return;
+        }
+
+        if (!nextRegistration.ticketId) {
+          try {
+            const ticket = await ensureRegistrationTicket();
+            nextRegistration = { ...nextRegistration, ...ticket.data };
+          } catch {
+            setBannerStatus('Secure ticket upgrade is temporarily unavailable; showing the compatible legacy pass.');
+          }
         }
 
         setRegistration(nextRegistration);

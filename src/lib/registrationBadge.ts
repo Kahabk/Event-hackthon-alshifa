@@ -1,18 +1,20 @@
 import QRCode from 'qrcode';
 import { Registration } from '../types';
+import { createEventTicketPayload, EVENT_ID } from './eventTicket';
 
 export const normalizeTeamName = (teamName: string) => teamName.trim().replace(/\s+/g, ' ').toLowerCase();
 export const teamNameDocId = (teamName: string) => encodeURIComponent(normalizeTeamName(teamName));
 
-export const createRegistrationQrPayload = (registration: Registration) => JSON.stringify({
-  event: 'Shifa SDG',
-  registrationId: registration.registrationId || '',
-  teamName: registration.teamName,
-  leaderName: registration.leaderName,
-  phoneNumber: registration.phoneNumber,
-  collegeName: registration.collegeName,
-  location: registration.location,
-});
+// The QR intentionally contains identifiers only. Personal details remain in
+// Firestore and are shown only after an authorized volunteer resolves the pass.
+export const createRegistrationQrPayload = (registration: Registration) => registration.ticketId
+  ? createEventTicketPayload(registration)
+  : JSON.stringify({
+      eventId: EVENT_ID,
+      registrationId: registration.registrationId || '',
+      teamId: registration.teamId || registration.teamNameKey || teamNameDocId(registration.teamName),
+      teamName: registration.teamName,
+    });
 
 export const createRegistrationQrUrl = (registration: Registration, width = 320) => (
   QRCode.toDataURL(createRegistrationQrPayload(registration), {

@@ -48,19 +48,19 @@ export default function Schedule() {
         </div>
 
         {/* Day selection tabs */}
-        <div className="flex gap-3 justify-center">
+        <div className="flex flex-wrap gap-2 justify-center">
           {SCHEDULE.map((dayObj, idx) => (
             <button
               key={dayObj.day}
               type="button"
               onClick={() => setSelectedDayIndex(idx)}
-              className={`py-3 px-5 sm:px-8 font-mono font-black text-xs sm:text-sm border-2 border-[#191A23] rounded-xl flex items-center gap-2 transition-all cursor-pointer ${
+              className={`py-2.5 px-4 sm:px-6 font-mono font-black text-xs sm:text-sm border-2 border-[#191A23] rounded-xl flex items-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
                 selectedDayIndex === idx
                   ? 'bg-[#B9FF66] text-[#191A23] shadow-[4px_4px_0px_#191A23] scale-[1.03]'
                   : 'bg-white text-[#191A23]/80 hover:bg-[#eaeaea]'
               }`}
             >
-              <Calendar className="w-4 h-4" />
+              <Calendar className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               <span className="block">{dayObj.day}</span>
               <span className="hidden sm:inline opacity-60">({dayObj.date.includes(',') ? dayObj.date.split(',')[1].trim() : dayObj.date})</span>
             </button>

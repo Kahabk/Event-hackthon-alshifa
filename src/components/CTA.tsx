@@ -1,10 +1,21 @@
 import { Sparkles, Star } from 'lucide-react';
+import type { LandingButtonConfig, LandingSectionConfig } from '../lib/landingContent';
 
 interface CTAProps {
   onRegisterClick: () => void;
+  content?: LandingSectionConfig;
+  onButtonAction?: (config: LandingButtonConfig, sourceSection: string) => void;
 }
 
-export default function CTA({ onRegisterClick }: CTAProps) {
+export default function CTA({ onRegisterClick, content, onButtonAction }: CTAProps) {
+  if (content?.visible === false) return null;
+
+  const heading = content?.title || 'Have an idea that can create impact?';
+  const description = content?.description || 'Form your team, submit your pitch deck, and take the first step toward creating sustainable impact through Shifa SDG Innovation Challenge Kerala 2026.';
+  const buttonText = content?.primaryButtonText || 'Register Now';
+  const eyebrow = content?.eyebrow || 'REGISTRATION CTA';
+  const buttonClass = content?.buttonConfig?.style === 'primary' ? 'neo-btn' : content?.buttonConfig?.style === 'outline' ? 'rounded-xl border-3 border-[#191A23] bg-transparent font-black' : 'neo-btn-black';
+
   return (
     <section className="py-20 md:py-28 px-4 md:px-8 bg-[#F3F3F3] text-[#191A23] border-b-3 border-[#191A23] relative overflow-hidden">
       {/* Decorative stars */}
@@ -22,28 +33,28 @@ export default function CTA({ onRegisterClick }: CTAProps) {
 
           {/* Icon Badge */}
           <div className="bg-white text-[#191A23] inline-flex p-3 rounded-2xl border-2 border-[#191A23] shadow-[3px_3px_0px_#191A23] text-sm font-mono font-black uppercase tracking-wider">
-            REGISTRATION CTA
+            {eyebrow}
           </div>
 
           <div className="space-y-4 max-w-2xl mx-auto">
             <h2 className="text-3xl sm:text-4xl md:text-5xl font-black tracking-tight leading-tight">
-              Have an idea that can create impact?
+              {heading}
             </h2>
             <p className="text-[#191A23]/80 font-bold text-sm sm:text-base leading-relaxed font-sans">
-              Form your team, submit your pitch deck, and take the first step toward creating sustainable impact through Shifa SDG Innovation Challenge Kerala 2026.
+              {description}
             </p>
           </div>
 
           {/* Action Trigger button */}
           <div className="pt-2">
-            <button
+            {content?.buttonConfig?.visible !== false && <button
               id="cta-register-btn"
               type="button"
-              onClick={onRegisterClick}
-              className="neo-btn-black px-10 py-5 text-sm md:text-base uppercase flex items-center justify-center gap-2.5 mx-auto cursor-pointer"
+              onClick={() => content?.buttonConfig && onButtonAction ? onButtonAction(content.buttonConfig, content.id) : onRegisterClick()}
+              className={`${buttonClass} px-10 py-5 text-sm md:text-base uppercase flex items-center justify-center gap-2.5 mx-auto cursor-pointer`}
             >
-              Register Now <Sparkles className="w-5 h-5 fill-[#B9FF66] text-[#B9FF66]" />
-            </button>
+              {buttonText} <Sparkles className="w-5 h-5 fill-[#B9FF66] text-[#B9FF66]" />
+            </button>}
           </div>
         </div>
       </div>

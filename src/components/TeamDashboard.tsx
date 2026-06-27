@@ -4,6 +4,7 @@ import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import {
   ArrowLeft,
   CheckCircle2,
+  ChevronDown,
   ClipboardList,
   CreditCard,
   FileText,
@@ -596,8 +597,12 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
     );
   }
 
-  if (loading || !loaderCycleDone) {
+  if (!loaderCycleDone) {
     return <FullScreenVideoLoader label="Loading team dashboard" />;
+  }
+
+  if (loading) {
+    return <TeamDashboardSkeleton />;
   }
 
   if (!registration) {
@@ -633,43 +638,49 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
   }
 
   return (
-    <main className="min-h-screen bg-[#F7F8FA] px-4 pb-16 pt-28 md:px-8">
-      <div className="mx-auto max-w-7xl space-y-8">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div className="space-y-3">
-            <button type="button" onClick={onBack} className="inline-flex items-center gap-2 text-sm font-black text-[#191A23] hover:underline">
-              <ArrowLeft className="h-4 w-4" /> Back to event
-            </button>
-            <span className="inline-flex items-center gap-2 rounded-md border-2 border-[#191A23] bg-[#B9FF66] px-3 py-1.5 text-xs font-black uppercase shadow-[2px_2px_0px_#191A23]">
-              <ClipboardList className="h-4 w-4" /> Team Dashboard
-            </span>
-            <h1 className="text-4xl font-black tracking-tight text-[#191A23] md:text-6xl">{formSettings.dashboard.title}</h1>
-            <p className="max-w-2xl text-sm font-bold leading-relaxed text-[#191A23]/75 md:text-base">
+    <main className="min-h-screen bg-[linear-gradient(180deg,#F8F4EC_0%,#F7F8FA_42%,#F7F8FA_100%)] px-4 pb-20 pt-24 md:px-8 md:pt-28">
+      <div className="mx-auto max-w-[1440px] space-y-6 md:space-y-8">
+        <header className="grid gap-6 overflow-hidden rounded-[28px] border-2 border-[#191A23] bg-[#191A23] p-5 text-white shadow-[7px_7px_0px_#B9FF66] md:p-8 lg:grid-cols-[minmax(0,1fr)_420px] lg:items-center">
+          <div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button type="button" onClick={onBack} className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-2 text-xs font-black text-white transition hover:bg-white/20">
+                <ArrowLeft className="h-4 w-4" /> Back to event
+              </button>
+              <span className="inline-flex items-center gap-2 rounded-full bg-[#B9FF66] px-3 py-2 text-xs font-black uppercase text-[#191A23]">
+                <ClipboardList className="h-4 w-4" /> Team Dashboard
+              </span>
+              <span className={`rounded-full px-3 py-2 text-xs font-black uppercase ${submission.status === 'submitted' ? 'bg-emerald-400 text-emerald-950' : 'bg-white/10 text-white/75'}`}>
+                {submission.status === 'submitted' ? 'Submitted' : 'Draft in progress'}
+              </span>
+            </div>
+            <h1 className="mt-5 text-4xl font-black tracking-tight md:text-6xl">{formSettings.dashboard.title}</h1>
+            <p className="mt-3 max-w-3xl text-sm font-semibold leading-relaxed text-white/68 md:text-base">
               {formSettings.dashboard.subtitle}
             </p>
           </div>
 
-          <aside className="rounded-2xl border-2 border-[#191A23] bg-white p-5 shadow-[5px_5px_0px_#B9FF66] lg:min-w-[320px]">
+          <aside className="rounded-[22px] border-2 border-white/15 bg-white p-5 text-[#191A23] shadow-[4px_4px_0px_#B9FF66] md:p-6">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs font-black uppercase text-[#191A23]/55">Registered Team</p>
-                <h2 className="mt-1 text-2xl font-black tracking-tight">{registration.teamName}</h2>
+                <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#191A23]/50">Registered Team</p>
+                <h2 className="mt-1 text-2xl font-black tracking-tight md:text-3xl">{registration.teamName}</h2>
                 <p className="mt-1 text-xs font-bold text-[#191A23]/60">{registration.collegeName || 'Team details saved'}</p>
               </div>
-              <span className="rounded-xl border-2 border-[#191A23] bg-[#B9FF66] px-3 py-2 font-mono text-sm font-black shadow-[2px_2px_0px_#191A23]">
+              <span className="rounded-xl border-2 border-[#191A23] bg-[#B9FF66] px-3 py-2 font-mono text-sm font-black">
                 {completion}%
               </span>
             </div>
-            <div className="mt-5 h-3 overflow-hidden rounded-full border-2 border-[#191A23] bg-[#F3F3F3]">
-              <div className="h-full bg-[#B9FF66]" style={{ width: `${completion}%` }} />
+            <div className="mt-5 h-3 overflow-hidden rounded-full bg-[#E8E8E8] ring-2 ring-[#191A23]">
+              <div className="h-full rounded-full bg-[#B9FF66] transition-[width] duration-500" style={{ width: `${completion}%` }} />
             </div>
-            <p className="mt-3 text-xs font-bold leading-relaxed text-[#191A23]/65">
-              Drafts can be saved anytime. Final submission checks every required section and the PPT link.
-            </p>
+            <div className="mt-4 flex items-center justify-between gap-3 text-xs font-bold text-[#191A23]/65">
+              <span>{filledSections.length} of {activeSectionFields.length} sections filled</span>
+              <span>{remainingItems.length === 1 && remainingItems[0] === 'Everything required is complete.' ? 'Ready' : `${remainingItems.length} next steps`}</span>
+            </div>
           </aside>
-        </div>
+        </header>
 
-        <section className="grid gap-5 lg:grid-cols-3">
+        <section className="grid items-start gap-5 md:grid-cols-2 xl:grid-cols-[1fr_1.12fr_0.88fr]">
           <DashboardCard
             icon={<Users className="h-5 w-5" />}
             label="Team Setup"
@@ -680,7 +691,7 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
               <InfoLine icon={<Mail className="h-4 w-4" />} label={registration.leaderEmail || user.email || 'Leader email'} />
               <InfoLine icon={<Phone className="h-4 w-4" />} label={registration.phoneNumber || 'Phone not added'} />
               <InfoLine icon={<MapPin className="h-4 w-4" />} label={registration.location || 'District not added'} />
-              <div className="rounded-xl border-2 border-[#191A23]/10 bg-[#F7F8FA] p-3">
+              <div className="rounded-xl border border-[#191A23]/10 bg-white/70 p-3">
                 <p className="text-xs font-black uppercase text-[#191A23]/45">College</p>
                 <p className="mt-1">{registration.collegeName || 'Not added'}</p>
                 <p className="mt-1 text-xs text-[#191A23]/55">{registration.fieldOfStudy || 'Department not added'}</p>
@@ -699,7 +710,6 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
               <ProgressTick done={activeSectionFields.filter(field => field.required).every(field => String(submission[field.key] || '').trim())} label="Idea sections completed" />
               <ProgressTick done={activeLinkFields.filter(field => field.required).every(field => String(submission[field.key] || '').trim())} label="Required links added" />
               <ProgressTick done={submission.status === 'submitted'} label="Final idea submitted" />
-              <ProgressTick done={false} label="Payment gateway coming soon" muted />
             </div>
           </DashboardCard>
 
@@ -707,24 +717,21 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
             icon={<CreditCard className="h-5 w-5" />}
             label="Registration Payment"
             title="Gateway not active"
+            tone="cream"
           >
             <div className="space-y-3">
               <p className="text-sm font-bold leading-relaxed text-[#191A23]/70">
                 Payment will open here when the gateway is connected. For now, teams can finish registration and idea submission without payment.
               </p>
-              <button
-                type="button"
-                disabled
-                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-full border-2 border-[#191A23] bg-[#F3F3F3] px-4 text-sm font-black uppercase text-[#191A23]/45"
-              >
-                <CreditCard className="h-4 w-4" /> Payment Coming Soon
-              </button>
+              <div className="flex items-center gap-3 rounded-xl border border-amber-300 bg-white/70 p-3 text-xs font-black uppercase text-amber-900">
+                <CreditCard className="h-4 w-4 flex-none" /> No payment required now
+              </div>
             </div>
           </DashboardCard>
         </section>
 
-        <section className="grid gap-5 lg:grid-cols-[0.58fr_0.42fr]">
-          <div className="rounded-2xl border-2 border-[#191A23] bg-white p-5 shadow-[5px_5px_0px_#191A23]">
+        <section className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+          <div className="rounded-2xl border-2 border-[#191A23] bg-white p-5 shadow-[4px_4px_0px_#191A23] md:p-6">
             <div className="flex items-center justify-between gap-4">
               <div>
                 <p className="font-mono text-xs font-black uppercase text-[#191A23]/50">Team Members</p>
@@ -742,12 +749,12 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
             </div>
           </div>
 
-          <div className="rounded-2xl border-2 border-[#191A23] bg-[#191A23] p-5 text-white shadow-[5px_5px_0px_#B9FF66]">
+          <div className="rounded-2xl border-2 border-[#191A23] bg-[#191A23] p-5 text-white shadow-[4px_4px_0px_#B9FF66] md:p-6">
             <p className="font-mono text-xs font-black uppercase text-[#B9FF66]">Remaining Work</p>
             <h2 className="mt-1 text-2xl font-black tracking-tight">What to finish next</h2>
             <div className="mt-5 space-y-3">
               {remainingItems.map(item => (
-                <div key={item} className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/5 p-3 text-sm font-bold text-white/80">
+                <div key={item} className="flex items-start gap-3 rounded-xl border border-white/15 bg-[#2A2A2E] p-3 text-sm font-bold text-white">
                   <CheckCircle2 className={`mt-0.5 h-4 w-4 flex-none ${item === 'Everything required is complete.' ? 'text-[#B9FF66]' : 'text-white/35'}`} />
                   <span>{item}</span>
                 </div>
@@ -756,8 +763,20 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
           </div>
         </section>
 
-        <form onSubmit={handleSubmit} className="grid gap-6 xl:grid-cols-[0.78fr_0.22fr]">
+        <form onSubmit={handleSubmit} className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_280px]">
           <section className="space-y-5">
+            <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/80 p-5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#191A23]/50">Submission Workspace</p>
+                <h2 className="mt-1 text-2xl font-black tracking-tight">Build the idea step by step</h2>
+                <p className="mt-1 text-sm font-semibold text-[#191A23]/60">Open a section, add the answer, then continue to the next step.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full bg-[#DDF8E5] px-3 py-2 text-xs font-black text-emerald-900">{filledSections.length} complete</span>
+                <span className="rounded-full bg-[#F3F3F3] px-3 py-2 text-xs font-black text-[#191A23]/65">{activeSectionFields.length - filledSections.length} remaining</span>
+              </div>
+            </div>
+
             <section className="rounded-2xl border-2 border-[#191A23] bg-white p-5 shadow-[5px_5px_0px_#191A23] md:p-7">
               <div className="mb-5 flex items-center gap-3">
                 <span className="flex h-10 w-10 items-center justify-center rounded-xl border-2 border-[#191A23] bg-[#B9FF66] shadow-[2px_2px_0px_#191A23]">
@@ -805,6 +824,8 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
                 value={String(submission[field.key] || '')}
                 error={errors[field.key]}
                 placeholder={field.placeholder}
+                required={field.required}
+                defaultOpen={index === 0 || Boolean(errors[field.key])}
                 onChange={(value) => updateTextField(field.key, value)}
               />
             ))}
@@ -874,6 +895,10 @@ export default function TeamDashboard({ user, onBack, onLogin, onRegisterClick }
                   <a
                     key={field.key}
                     href={`#${field.key}`}
+                    onClick={() => {
+                      const section = document.getElementById(field.key);
+                      if (section instanceof HTMLDetailsElement) section.open = true;
+                    }}
                     className={`flex items-center justify-between rounded-xl border-2 px-3 py-2 text-xs font-black transition ${
                       filled ? 'border-[#191A23] bg-[#B9FF66]' : 'border-[#191A23]/15 bg-[#F7F8FA] text-[#191A23]/60'
                     }`}
@@ -901,12 +926,12 @@ function DashboardCard({
   icon: ReactNode;
   label: string;
   title: string;
-  tone?: 'white' | 'green';
+  tone?: 'white' | 'green' | 'cream';
   children: ReactNode;
 }) {
   return (
-    <div className={`rounded-2xl border-2 border-[#191A23] p-5 shadow-[5px_5px_0px_#191A23] ${tone === 'green' ? 'bg-[#B9FF66]' : 'bg-white'}`}>
-      <div className="mb-5 flex items-start gap-3">
+    <div className={`rounded-2xl border-2 border-[#191A23] p-5 shadow-[4px_4px_0px_#191A23] md:p-6 ${tone === 'green' ? 'bg-[#DDF8E5]' : tone === 'cream' ? 'bg-[#FFF1C7]' : 'bg-white'}`}>
+      <div className="mb-4 flex items-start gap-3">
         <span className="flex h-11 w-11 flex-none items-center justify-center rounded-xl border-2 border-[#191A23] bg-white shadow-[2px_2px_0px_#191A23]">
           {icon}
         </span>
@@ -917,6 +942,39 @@ function DashboardCard({
       </div>
       {children}
     </div>
+  );
+}
+
+function TeamDashboardSkeleton() {
+  return (
+    <main className="min-h-screen bg-[#F7F8FA] px-4 pb-16 pt-28 md:px-8" aria-label="Loading dashboard data" aria-busy="true">
+      <div className="mx-auto max-w-7xl animate-pulse space-y-8">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div className="space-y-3">
+            <div className="h-4 w-28 rounded-full bg-slate-200" />
+            <div className="h-8 w-40 rounded-xl bg-slate-200" />
+            <div className="h-12 w-full max-w-xl rounded-2xl bg-slate-200 sm:w-[34rem]" />
+            <div className="h-4 w-full max-w-lg rounded-full bg-slate-200 sm:w-[28rem]" />
+          </div>
+          <div className="h-14 w-full rounded-2xl bg-slate-200 sm:w-52" />
+        </div>
+
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }, (_, index) => <div key={index} className="h-32 rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="m-5 h-4 w-24 rounded-full bg-slate-200" /><div className="mx-5 mt-7 h-8 w-20 rounded-xl bg-slate-200" /></div>)}
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+          <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="h-7 w-52 rounded-xl bg-slate-200" />
+            {Array.from({ length: 5 }, (_, index) => <div key={index} className="space-y-2 rounded-xl border border-slate-100 p-4"><div className="h-4 w-36 rounded-full bg-slate-200" /><div className="h-12 w-full rounded-xl bg-slate-100" /></div>)}
+          </div>
+          <div className="space-y-5">
+            <div className="h-64 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="h-6 w-40 rounded-xl bg-slate-200" /><div className="mt-7 h-36 rounded-2xl bg-slate-100" /></div>
+            <div className="h-48 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="h-6 w-32 rounded-xl bg-slate-200" /><div className="mt-6 space-y-3">{Array.from({ length: 3 }, (_, index) => <div key={index} className="h-4 rounded-full bg-slate-100" />)}</div></div>
+          </div>
+        </div>
+      </div>
+    </main>
   );
 }
 
@@ -964,6 +1022,8 @@ function IdeaSection({
   value,
   error,
   placeholder,
+  required,
+  defaultOpen,
   onChange,
 }: {
   key?: string;
@@ -976,38 +1036,43 @@ function IdeaSection({
   value: string;
   error?: string;
   placeholder: string;
+  required?: boolean;
+  defaultOpen?: boolean;
   onChange: (value: string) => void;
 }) {
   const remaining = limit - value.length;
 
   return (
-    <section id={id} className="rounded-2xl border-2 border-[#191A23] bg-white p-5 shadow-[5px_5px_0px_#191A23] md:p-7">
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl border-2 border-[#191A23] bg-[#B9FF66] shadow-[2px_2px_0px_#191A23]">
-            {icon}
-          </span>
-          <div>
-            <p className="font-mono text-[10px] font-black uppercase tracking-widest text-[#191A23]/55">Section {String(number).padStart(2, '0')}</p>
-            <h2 className="text-2xl font-black tracking-tight">{title}</h2>
-          </div>
-        </div>
-        <span className={`rounded-full border-2 border-[#191A23] px-3 py-1 font-mono text-xs font-black ${remaining < 60 ? 'bg-red-50 text-red-600' : 'bg-[#F3F3F3]'}`}>
-          {value.length}/{limit}
+    <details id={id} defaultOpen={defaultOpen} className={`group scroll-mt-28 overflow-hidden rounded-2xl border-2 bg-white shadow-[4px_4px_0px_#191A23] ${error ? 'border-red-500' : 'border-[#191A23]'}`}>
+      <summary className="flex cursor-pointer list-none items-center gap-3 p-4 outline-none transition hover:bg-[#F7F8FA] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#B9FF66] md:p-5 [&::-webkit-details-marker]:hidden">
+        <span className={`flex h-11 w-11 flex-none items-center justify-center rounded-xl border-2 border-[#191A23] shadow-[2px_2px_0px_#191A23] ${value.trim() ? 'bg-[#B9FF66]' : 'bg-white'}`}>
+          {value.trim() ? <CheckCircle2 className="h-5 w-5" /> : icon}
         </span>
-      </div>
+        <span className="min-w-0 flex-1">
+          <span className="font-mono text-[10px] font-black uppercase tracking-widest text-[#191A23]/50">Section {String(number).padStart(2, '0')}{required ? ' • Required' : ' • Optional'}</span>
+          <span className="mt-0.5 block truncate text-lg font-black tracking-tight sm:text-xl">{title}</span>
+          {!value.trim() && <span className="mt-1 block truncate text-xs font-semibold text-[#191A23]/50">{placeholder}</span>}
+        </span>
+        <span className="hidden rounded-full bg-[#F3F3F3] px-3 py-1 font-mono text-[10px] font-black text-[#191A23]/60 sm:block">{value.length}/{limit}</span>
+        <ChevronDown className="h-5 w-5 flex-none text-[#191A23]/45 transition-transform group-open:rotate-180" />
+      </summary>
 
-      <textarea
-        id={`${id}-input`}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        maxLength={limit}
-        rows={rows}
-        className="w-full resize-y rounded-xl border-2 border-[#191A23] bg-[#F3F3F3] px-4 py-3 text-sm font-bold leading-relaxed focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
-        placeholder={placeholder}
-      />
-      {error && <p className="mt-2 text-xs font-bold text-red-600">{error}</p>}
-    </section>
+      <div className="border-t-2 border-[#191A23]/10 p-4 md:p-5">
+        <textarea
+          id={`${id}-input`}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          maxLength={limit}
+          rows={rows}
+          className="w-full resize-y rounded-xl border-2 border-[#191A23] bg-[#F3F3F3] px-4 py-3 text-sm font-bold leading-relaxed focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#B9FF66]"
+          placeholder={placeholder}
+        />
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <span className="text-xs font-bold text-red-600">{error || ''}</span>
+          <span className={`font-mono text-[10px] font-black ${remaining < 60 ? 'text-red-600' : 'text-[#191A23]/45'}`}>{remaining} characters left</span>
+        </div>
+      </div>
+    </details>
   );
 }
 

@@ -43,6 +43,57 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/volunteers/$(volunteerId())).data.allowedListIds.hasAny([listId]);
     }
 
+    function validVolunteerAttendanceCreate(markId) {
+      let list = get(/databases/$(database)/documents/attendanceLists/$(request.resource.data.listId)).data;
+      let team = get(/databases/$(database)/documents/registrations/$(request.resource.data.teamId)).data;
+      return request.resource.data.keys().hasOnly([
+          'eventId', 'listId', 'listTitle', 'sectionId', 'sectionName',
+          'teamId', 'registrationId', 'teamName', 'leaderName', 'leaderEmail',
+          'phoneNumber', 'collegeName', 'location', 'teamSize', 'members',
+          'markedByUid', 'markedByEmail', 'markedByName', 'qrPayload',
+          'scanSource', 'ticketId', 'ticketVersion', 'ticketVerification',
+          'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.eventId == 'shifa-sdg-2026'
+        && request.resource.data.listId is string
+        && request.resource.data.teamId is string
+        && markId == request.resource.data.listId + '_' + request.resource.data.teamId
+        && volunteerCanMark(request.resource.data.listId)
+        && exists(/databases/$(database)/documents/registrations/$(request.resource.data.teamId))
+        && request.resource.data.listTitle == list.title
+        && request.resource.data.sectionId == request.resource.data.listId
+        && request.resource.data.sectionName == list.title
+        && request.resource.data.registrationId == team.registrationId
+        && request.resource.data.teamName == team.teamName
+        && request.resource.data.leaderName == team.leaderName
+        && request.resource.data.leaderEmail == team.leaderEmail
+        && request.resource.data.phoneNumber == team.phoneNumber
+        && request.resource.data.collegeName == team.collegeName
+        && request.resource.data.location == team.location
+        && request.resource.data.teamSize == team.teamSize
+        && request.resource.data.members == team.members
+        && (!team.keys().hasAny(['accessStatus']) || team.accessStatus != 'disabled')
+        && request.resource.data.markedByUid == request.auth.uid
+        && request.resource.data.markedByEmail == request.auth.token.email
+        && request.resource.data.markedByName is string
+        && request.resource.data.qrPayload is string
+        && request.resource.data.qrPayload.size() <= 2048
+        && request.resource.data.scanSource in ['camera', 'upload', 'manual']
+        && request.resource.data.ticketId is string
+        && request.resource.data.ticketVersion is int
+        && request.resource.data.ticketVerification in ['verified-ticket', 'legacy-qr', 'manual-lookup']
+        && (
+          request.resource.data.ticketVerification != 'verified-ticket'
+          || (
+            team.keys().hasAll(['ticketId', 'ticketVersion'])
+            && request.resource.data.ticketId == team.ticketId
+            && request.resource.data.ticketVersion == team.ticketVersion
+          )
+        )
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
     function isOwnJudgeDoc(judgeId) {
       return isJudge()
         && judgeId == request.auth.token.email;
@@ -59,7 +110,12 @@ service cloud.firestore {
         && request.resource.data.assignmentId is string
         && exists(/databases/$(database)/documents/judgeAssignments/$(request.resource.data.assignmentId))
         && get(/databases/$(database)/documents/judgeAssignments/$(request.resource.data.assignmentId)).data.judgeId == request.auth.token.email
-        && get(/databases/$(database)/documents/judgeAssignments/$(request.resource.data.assignmentId)).data.teamId == request.resource.data.teamId;
+        && get(/databases/$(database)/documents/judgeAssignments/$(request.resource.data.assignmentId)).data.teamId == request.resource.data.teamId
+        && exists(/databases/$(database)/documents/registrations/$(request.resource.data.teamId))
+        && (
+          !get(/databases/$(database)/documents/registrations/$(request.resource.data.teamId)).data.keys().hasAny(['reviewStatus'])
+          || get(/databases/$(database)/documents/registrations/$(request.resource.data.teamId)).data.reviewStatus != 'rejected'
+        );
     }
 
     function validIdeaSubmission() {
@@ -143,17 +199,8 @@ service cloud.firestore {
 
     match /attendanceMarks/{markId} {
       allow read: if isAdmin() || isVolunteer();
-      allow create, update: if isAdmin()
-        || (
-          volunteerCanMark(request.resource.data.listId)
-          && request.resource.data.markedByUid == request.auth.uid
-          && request.resource.data.markedByEmail == request.auth.token.email
-        );
-      allow delete: if isAdmin()
-        || (
-          volunteerCanMark(resource.data.listId)
-          && resource.data.markedByUid == request.auth.uid
-        );
+      allow create: if isAdmin() || validVolunteerAttendanceCreate(markId);
+      allow update, delete: if isAdmin();
     }
 
     match /judgeAssignments/{assignmentId} {
@@ -162,6 +209,11 @@ service cloud.firestore {
       allow update: if isAdmin()
         || (
           isOwnJudgeAssignment()
+          && exists(/databases/$(database)/documents/registrations/$(resource.data.teamId))
+          && (
+            !get(/databases/$(database)/documents/registrations/$(resource.data.teamId)).data.keys().hasAny(['reviewStatus'])
+            || get(/databases/$(database)/documents/registrations/$(resource.data.teamId)).data.reviewStatus != 'rejected'
+          )
           && request.resource.data.diff(resource.data).changedKeys().hasOnly(['status', 'reviewedAt', 'updatedAt'])
           && request.resource.data.status == 'completed'
         );
@@ -201,6 +253,33 @@ service cloud.firestore {
     match /siteContent/{contentId} {
       allow read: if true;
       allow write: if isAdmin();
+    }
+
+    match /landingAssets/{assetId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /forms/{formId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /formSubmissions/{submissionId} {
+      allow read, update, delete: if isAdmin();
+      allow create: if request.resource.data.formId is string
+        && request.resource.data.formTitle is string
+        && request.resource.data.submittedData is map
+        && request.resource.data.sourcePage is string
+        && request.resource.data.sourceSection is string
+        && request.resource.data.sourceButton is string
+        && request.resource.data.keys().hasOnly([
+          'formId', 'formTitle', 'submittedData', 'sourcePage',
+          'sourceSection', 'sourceButton', 'createdAt'
+        ])
+        && exists(/databases/$(database)/documents/forms/$(request.resource.data.formId))
+        && get(/databases/$(database)/documents/forms/$(request.resource.data.formId)).data.status == 'active'
+        && get(/databases/$(database)/documents/forms/$(request.resource.data.formId)).data.title == request.resource.data.formTitle;
     }
   }
 }

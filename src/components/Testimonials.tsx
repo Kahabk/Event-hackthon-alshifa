@@ -1,7 +1,29 @@
 import { Quote, MessageSquare } from 'lucide-react';
 import { TESTIMONIALS } from '../data';
+import type { LandingSectionConfig } from '../lib/landingContent';
 
-export default function Testimonials() {
+interface TestimonialsProps {
+  content?: LandingSectionConfig;
+}
+
+export default function Testimonials({ content }: TestimonialsProps) {
+  if (content?.visible === false) return null;
+
+  // Use editor content items if available, else fall back to static TESTIMONIALS
+  const items = content?.items && content.items.length > 0
+    ? content.items.map((item, i) => ({
+        id: item.id || `tm-${i}`,
+        text: item.description || '',
+        author: item.title || '',
+        role: item.role || '',
+        team: item.answer || '',
+      }))
+    : TESTIMONIALS;
+
+  const sectionTitle = content?.title || 'What the Challenge Creates';
+  const eyebrow = content?.eyebrow || 'Expected Outcomes';
+  const description = content?.description || "The challenge is designed to build student capacity, generate ideas, engage colleges, and strengthen Shifa's long-term innovation ecosystem.";
+
   return (
     <section className="py-20 md:py-28 px-4 md:px-8 bg-[#F3F3F3] text-[#191A23] border-b-3 border-[#191A23] relative overflow-hidden">
       {/* Background visual detail */}
@@ -11,21 +33,23 @@ export default function Testimonials() {
         {/* Section Header */}
         <div className="text-center space-y-3 max-w-xl mx-auto">
           <span className="bg-[#B9FF66] text-[#191A23] font-mono font-bold text-xs px-3.5 py-1.5 border-2 border-[#191A23] rounded-md shadow-[2px_2px_0px_#191A23] uppercase tracking-wider inline-block">
-            Expected Outcomes
+            {eyebrow}
           </span>
           <h2 className="text-3xl sm:text-4xl md:text-5xl font-black tracking-tight leading-tight text-[#191A23]">
-            What the Challenge <span className="neo-highlight">Creates</span>
+            {sectionTitle.includes('Creates') ? (
+              <>What the Challenge <span className="neo-highlight">Creates</span></>
+            ) : sectionTitle}
           </h2>
           <p className="text-[#191A23]/70 font-semibold text-sm sm:text-base leading-relaxed">
-            The challenge is designed to build student capacity, generate ideas, engage colleges, and strengthen Shifa's long-term innovation ecosystem.
+            {description}
           </p>
         </div>
 
         {/* Testimonials Stack */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4">
-          {TESTIMONIALS.map((t, idx) => (
+          {items.map((t, idx) => (
             <div
-              key={idx}
+              key={(t as any).id || idx}
               className="neo-card p-6 md:p-8 flex flex-col justify-between text-left relative group min-h-[220px]"
             >
               {/* Decorative quotation shape */}

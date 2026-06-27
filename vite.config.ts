@@ -1,7 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
   return {
@@ -13,7 +13,7 @@ export default defineConfig(() => {
     },
     server: {
       allowedHosts: [
-        'offerings-brake-environmental-point.trycloudflare.com',
+        'rack-sunset-perform-protest.trycloudflare.com',
         '6290-150-107-212-194.ngrok-free.app',
       ],
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

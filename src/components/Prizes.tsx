@@ -19,7 +19,7 @@ export default function Prizes() {
     switch (color) {
       case 'black':
         return {
-          box: 'neo-card-black text-white hover:border-[#B9FF66] scale-[1.04] md:scale-[1.06] z-10',
+          box: 'neo-card-black text-white hover:border-[#B9FF66]',
           title: 'text-[#B9FF66] font-mono',
           amount: 'text-white border-b-2 border-white/10 pb-4',
           rewardItem: 'text-neutral-300 font-sans',
@@ -65,7 +65,7 @@ export default function Prizes() {
         </div>
 
         {/* Prizes Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-10 md:gap-6 items-stretch pt-2">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start pt-2">
           {PRIZES.map((prize) => {
             const styles = getStyleClasses(prize.color);
             return (

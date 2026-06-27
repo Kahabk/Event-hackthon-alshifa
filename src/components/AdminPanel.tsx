@@ -1,12 +1,12 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   collection,
   arrayUnion,
   deleteDoc,
   doc,
   getDocs,
+  getDoc,
   limit,
-  onSnapshot,
   orderBy,
   query,
   QuerySnapshot,
@@ -54,15 +54,14 @@ import { User as FirebaseUser } from 'firebase/auth';
 import { db, functions } from '../lib/firebase';
 import { AttendanceList, AttendanceMark, IdeaSubmission, StoredRegistration, TeamMember, Volunteer } from '../types';
 import {
-  createLandingSection,
   defaultLandingContent,
+  landingDraftDocId,
   LandingEditorContent,
-  LandingEditorSection,
-  LandingSectionLayout,
   landingContentCollection,
   landingContentDocId,
   normalizeLandingContent,
 } from '../lib/landingContent';
+import LandingEditorPage, { type SaveState, type SelectedLandingBlock } from './landing-editor/LandingEditorPage';
 import {
   defaultFormSettings,
   formSettingsCollection,
@@ -70,16 +69,27 @@ import {
   normalizeFormSettings,
 } from '../lib/formSettings';
 import type { DashboardDomainSetting, EventFormSettings, IdeaSectionSetting, LinkFieldSetting } from '../lib/formSettings';
+import { FormBuilderTab, FormSubmissionsTab } from './AdminFormsManager';
+import AppleStyleAvatar from './AppleStyleAvatar';
 
-type AdminTab = 'overview' | 'landing' | 'forms' | 'teams' | 'attendance' | 'judges' | 'assignments' | 'reviews' | 'leaderboard' | 'rounds' | 'announcements' | 'finalists' | 'users' | 'audit';
+type AdminTab = 'overview' | 'landing' | 'form-builder' | 'form-submissions' | 'forms' | 'teams' | 'attendance' | 'judges' | 'assignments' | 'reviews' | 'leaderboard' | 'rounds' | 'announcements' | 'finalists' | 'users' | 'audit';
 type ReviewStatus = 'pending' | 'under-review' | 'approved' | 'rejected' | 'needs-revision';
 type RoundName = 'Round 1' | 'Round 2' | 'Round 3';
+const ROUND_NAMES: RoundName[] = ['Round 1', 'Round 2', 'Round 3'];
+const roundForTeam = (team: StoredRegistration): RoundName => (
+  ROUND_NAMES.includes(team.currentRound as RoundName) ? team.currentRound as RoundName : 'Round 1'
+);
+const nextRoundForTeam = (team: StoredRegistration): RoundName | null => {
+  const index = ROUND_NAMES.indexOf(roundForTeam(team));
+  return index >= 0 && index < ROUND_NAMES.length - 1 ? ROUND_NAMES[index + 1] : null;
+};
 
 interface AdminPanelProps {
   user: FirebaseUser | null;
   isAdmin: boolean;
   onBack: () => void;
   onLogin: () => void;
+  onOpenLandingEditor: () => void;
 }
 
 interface Judge {
@@ -119,6 +129,7 @@ interface Assignment {
 
 interface Score {
   id: string;
+  assignmentId?: string;
   teamId: string;
   judgeId: string;
   round: RoundName;
@@ -189,11 +200,14 @@ interface AdminCache {
   volunteers?: Volunteer[];
   attendanceLists?: AttendanceList[];
   attendanceMarks?: AttendanceMark[];
+  loadedCollections?: AdminDataKey[];
 }
 
+type AdminDataKey = 'registrations' | 'submissions' | 'judges' | 'assignments' | 'scores' | 'announcements' | 'auditLogs' | 'finalists' | 'userProfiles' | 'volunteers' | 'attendanceLists' | 'attendanceMarks';
+
 const ADMIN_CACHE_KEY = 'shifa-sdg-admin-cache-v1';
-const ADMIN_CACHE_TTL = 5 * 60 * 1000;
-const PAGE_SIZE = 200;
+const ADMIN_CACHE_TTL = 30 * 60 * 1000;
+const PAGE_SIZE = 100;
 
 const blankJudge: Omit<Judge, 'id'> = {
   name: '',
@@ -227,8 +241,18 @@ const blankAttendanceList: Omit<AttendanceList, 'id'> = {
   title: '',
   description: '',
   active: true,
+  type: 'workshop',
   color: 'mint',
 };
+
+const ATTENDANCE_SECTION_TYPES: Array<{ value: NonNullable<AttendanceList['type']>; label: string }> = [
+  { value: 'workshop', label: 'Workshop' },
+  { value: 'entry', label: 'Entry Check-in' },
+  { value: 'food', label: 'Food' },
+  { value: 'certificate', label: 'Certificate' },
+  { value: 'gmc', label: 'GMC' },
+  { value: 'custom', label: 'Custom' },
+];
 
 const blankScoreForm: ScoreForm = {
   teamId: '',
@@ -387,7 +411,7 @@ const deleteAuthUserAccount = httpsCallable<
   { deletedUid: string; deletedEmail?: string; ownedTeamIds?: string[]; updatedMemberTeamIds?: string[] }
 >(functions, 'deleteAuthUser');
 
-export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPanelProps) {
+export default function AdminPanel({ user, isAdmin, onBack, onLogin, onOpenLandingEditor }: AdminPanelProps) {
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [registrations, setRegistrations] = useState<StoredRegistration[]>([]);
   const [submissions, setSubmissions] = useState<IdeaSubmission[]>([]);
@@ -419,164 +443,134 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
   const [selectedAssignmentTeams, setSelectedAssignmentTeams] = useState<string[]>([]);
   const [scoreForm, setScoreForm] = useState<ScoreForm>(blankScoreForm);
   const [landingDraft, setLandingDraft] = useState<LandingEditorContent>(defaultLandingContent);
-  const [selectedLandingSectionId, setSelectedLandingSectionId] = useState(defaultLandingContent.sections[0]?.id || '');
+  const [landingPublished, setLandingPublished] = useState<LandingEditorContent>(defaultLandingContent);
+  const [selectedLandingSectionId, setSelectedLandingSectionId] = useState<SelectedLandingBlock>('hero');
+  const [landingSaveState, setLandingSaveState] = useState<SaveState>('idle');
+  const [landingEditorError, setLandingEditorError] = useState('');
   const [formDraft, setFormDraft] = useState<EventFormSettings>(defaultFormSettings);
+  const loadedCollectionsRef = useRef<Set<AdminDataKey>>(new Set());
+  const cacheHydratedRef = useRef(false);
 
   const adminName = user?.displayName || user?.email || 'Admin';
 
-  const refreshData = async (force = false) => {
-    if (!isAdmin) {
+  const hydrateCache = () => {
+    if (cacheHydratedRef.current) return;
+    cacheHydratedRef.current = true;
+    const cached = readCache();
+    if (!cached) return;
+    setRegistrations(cached.registrations || []);
+    setSubmissions(cached.submissions || []);
+    setJudges(cached.judges || []);
+    setAssignments(cached.assignments || []);
+    setScores(cached.scores || []);
+    setAnnouncements(cached.announcements || []);
+    setAuditLogs(cached.auditLogs || []);
+    setFinalists(cached.finalists || []);
+    setUserProfiles(cached.userProfiles || []);
+    setVolunteers(cached.volunteers || []);
+    setAttendanceLists(cached.attendanceLists || []);
+    setAttendanceMarks(cached.attendanceMarks || []);
+    loadedCollectionsRef.current = new Set(cached.loadedCollections || [
+      'registrations', 'submissions', 'judges', 'assignments', 'scores', 'announcements',
+      'auditLogs', 'finalists', 'userProfiles', 'volunteers', 'attendanceLists', 'attendanceMarks',
+    ]);
+  };
+
+  const loadCollections = async (requested: AdminDataKey[], force = false) => {
+    const keys = requested.filter(key => force || !loadedCollectionsRef.current.has(key));
+    if (!keys.length) {
       setLoading(false);
       return;
     }
-
     setLoading(true);
     setError('');
-
+    const read = async (key: AdminDataKey) => {
+      if (key === 'registrations') return { key, ...(await safeAdminRead('registrations', getDocs(query(collection(db, 'registrations'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE))), item => ({ id: item.id, ...item.data() } as StoredRegistration))) };
+      if (key === 'submissions') return { key, ...(await safeAdminRead('ideaSubmissions', getDocs(query(collection(db, 'ideaSubmissions'), orderBy('updatedAt', 'desc'), limit(PAGE_SIZE))), item => ({ id: item.id, ...item.data() } as IdeaSubmission))) };
+      if (key === 'judges') return { key, ...(await safeAdminRead('judges', getDocs(query(collection(db, 'judges'), limit(PAGE_SIZE))), item => ({ id: item.id, ...item.data() } as Judge))) };
+      if (key === 'assignments') return { key, ...(await safeAdminRead('judgeAssignments', getDocs(query(collection(db, 'judgeAssignments'), limit(PAGE_SIZE))), item => ({ id: item.id, ...item.data() } as Assignment))) };
+      if (key === 'scores') return { key, ...(await safeAdminRead('scores', getDocs(query(collection(db, 'scores'), limit(PAGE_SIZE))), item => ({ id: item.id, ...item.data() } as Score))) };
+      if (key === 'announcements') return { key, ...(await safeAdminRead('announcements', getDocs(query(collection(db, 'announcements'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE))), item => ({ id: item.id, ...item.data() } as Announcement))) };
+      if (key === 'auditLogs') return { key, ...(await safeAdminRead('auditLogs', getDocs(query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc'), limit(20))), item => ({ id: item.id, ...item.data() } as AuditLog))) };
+      if (key === 'finalists') return { key, ...(await safeAdminRead('finalists', getDocs(query(collection(db, 'finalists'), limit(PAGE_SIZE))), item => ({ id: item.id, ...item.data() } as Finalist))) };
+      if (key === 'userProfiles') return { key, ...(await safeAdminRead('userProfiles', getDocs(query(collection(db, 'userProfiles'), orderBy('updatedAt', 'desc'), limit(PAGE_SIZE))), item => ({ id: item.id, ...item.data() } as UserProfile))) };
+      if (key === 'volunteers') return { key, ...(await safeAdminRead('volunteers', getDocs(query(collection(db, 'volunteers'), limit(PAGE_SIZE))), item => ({ id: item.id, ...item.data() } as Volunteer))) };
+      if (key === 'attendanceLists') return { key, ...(await safeAdminRead('attendanceLists', getDocs(query(collection(db, 'attendanceLists'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE))), item => ({ id: item.id, ...item.data() } as AttendanceList))) };
+      return { key, ...(await safeAdminRead('attendanceMarks', getDocs(query(collection(db, 'attendanceMarks'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE))), item => ({ id: item.id, ...item.data() } as AttendanceMark))) };
+    };
     try {
-      const cached = !force ? readCache() : null;
-      if (cached) {
-        setRegistrations(cached.registrations);
-        setSubmissions(cached.submissions);
-        setJudges(cached.judges);
-        setAssignments(cached.assignments);
-        setScores(cached.scores);
-        setAnnouncements(cached.announcements);
-        setAuditLogs(cached.auditLogs);
-        setFinalists(cached.finalists);
-        setUserProfiles(cached.userProfiles || []);
-        setVolunteers(cached.volunteers || []);
-        setAttendanceLists(cached.attendanceLists || []);
-        setAttendanceMarks(cached.attendanceMarks || []);
-        setLoading(false);
-        return;
-      }
-
-      const [
-        registrationsResult,
-        submissionsResult,
-        judgesResult,
-        assignmentsResult,
-        scoresResult,
-        announcementsResult,
-        auditResult,
-        finalistsResult,
-        userProfilesResult,
-        volunteersResult,
-        attendanceListsResult,
-        attendanceMarksResult,
-      ] = await Promise.all([
-        safeAdminRead('registrations', getDocs(query(collection(db, 'registrations'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as StoredRegistration)),
-        safeAdminRead('ideaSubmissions', getDocs(query(collection(db, 'ideaSubmissions'), orderBy('updatedAt', 'desc'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as IdeaSubmission)),
-        safeAdminRead('judges', getDocs(query(collection(db, 'judges'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as Judge)),
-        safeAdminRead('judgeAssignments', getDocs(query(collection(db, 'judgeAssignments'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as Assignment)),
-        safeAdminRead('scores', getDocs(query(collection(db, 'scores'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as Score)),
-        safeAdminRead('announcements', getDocs(query(collection(db, 'announcements'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as Announcement)),
-        safeAdminRead('auditLogs', getDocs(query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc'), limit(80))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as AuditLog)),
-        safeAdminRead('finalists', getDocs(query(collection(db, 'finalists'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as Finalist)),
-        safeAdminRead('userProfiles', getDocs(query(collection(db, 'userProfiles'), orderBy('updatedAt', 'desc'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as UserProfile)),
-        safeAdminRead('volunteers', getDocs(query(collection(db, 'volunteers'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as Volunteer)),
-        safeAdminRead('attendanceLists', getDocs(query(collection(db, 'attendanceLists'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as AttendanceList)),
-        safeAdminRead('attendanceMarks', getDocs(query(collection(db, 'attendanceMarks'), orderBy('createdAt', 'desc'), limit(PAGE_SIZE))), snapshot => ({ id: snapshot.id, ...snapshot.data() } as AttendanceMark)),
-      ]);
-
-      const nextData = {
-        registrations: registrationsResult.data,
-        submissions: submissionsResult.data,
-        judges: judgesResult.data,
-        assignments: assignmentsResult.data,
-        scores: scoresResult.data,
-        announcements: announcementsResult.data,
-        auditLogs: auditResult.data,
-        finalists: finalistsResult.data,
-        userProfiles: userProfilesResult.data,
-        volunteers: volunteersResult.data,
-        attendanceLists: attendanceListsResult.data,
-        attendanceMarks: attendanceMarksResult.data,
-      };
-
-      const blockedCollections = [
-        registrationsResult,
-        submissionsResult,
-        judgesResult,
-        assignmentsResult,
-        scoresResult,
-        announcementsResult,
-        auditResult,
-        finalistsResult,
-        userProfilesResult,
-        volunteersResult,
-        attendanceListsResult,
-        attendanceMarksResult,
-      ].filter(result => result.error).map(result => result.label);
-
-      if (blockedCollections.length) {
-        setError(`Firebase rules are blocking: ${blockedCollections.join(', ')}. Publish the latest firestore.rules and refresh.`);
-      }
-
-      setRegistrations(nextData.registrations);
-      setSubmissions(nextData.submissions);
-      setJudges(nextData.judges);
-      setAssignments(nextData.assignments);
-      setScores(nextData.scores);
-      setAnnouncements(nextData.announcements);
-      setAuditLogs(nextData.auditLogs);
-      setFinalists(nextData.finalists);
-      setUserProfiles(nextData.userProfiles);
-      setVolunteers(nextData.volunteers);
-      setAttendanceLists(nextData.attendanceLists);
-      setAttendanceMarks(nextData.attendanceMarks);
-      writeCache(nextData);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load admin dashboard.');
+      const results = await Promise.all(keys.map(read));
+      const cacheData: Omit<AdminCache, 'expiresAt'> = { registrations, submissions, judges, assignments, scores, announcements, auditLogs, finalists, userProfiles, volunteers, attendanceLists, attendanceMarks, loadedCollections: [] };
+      results.forEach(result => {
+        if (result.error) return;
+        loadedCollectionsRef.current.add(result.key);
+        if (result.key === 'registrations') { setRegistrations(result.data as StoredRegistration[]); cacheData.registrations = result.data as StoredRegistration[]; }
+        else if (result.key === 'submissions') { setSubmissions(result.data as IdeaSubmission[]); cacheData.submissions = result.data as IdeaSubmission[]; }
+        else if (result.key === 'judges') { setJudges(result.data as Judge[]); cacheData.judges = result.data as Judge[]; }
+        else if (result.key === 'assignments') { setAssignments(result.data as Assignment[]); cacheData.assignments = result.data as Assignment[]; }
+        else if (result.key === 'scores') { setScores(result.data as Score[]); cacheData.scores = result.data as Score[]; }
+        else if (result.key === 'announcements') { setAnnouncements(result.data as Announcement[]); cacheData.announcements = result.data as Announcement[]; }
+        else if (result.key === 'auditLogs') { setAuditLogs(result.data as AuditLog[]); cacheData.auditLogs = result.data as AuditLog[]; }
+        else if (result.key === 'finalists') { setFinalists(result.data as Finalist[]); cacheData.finalists = result.data as Finalist[]; }
+        else if (result.key === 'userProfiles') { setUserProfiles(result.data as UserProfile[]); cacheData.userProfiles = result.data as UserProfile[]; }
+        else if (result.key === 'volunteers') { setVolunteers(result.data as Volunteer[]); cacheData.volunteers = result.data as Volunteer[]; }
+        else if (result.key === 'attendanceLists') { setAttendanceLists(result.data as AttendanceList[]); cacheData.attendanceLists = result.data as AttendanceList[]; }
+        else { setAttendanceMarks(result.data as AttendanceMark[]); cacheData.attendanceMarks = result.data as AttendanceMark[]; }
+      });
+      cacheData.loadedCollections = Array.from(loadedCollectionsRef.current);
+      writeCache(cacheData);
+      const blocked = results.filter(result => result.error).map(result => result.label);
+      if (blocked.length) setError(`Firebase rules are blocking: ${blocked.join(', ')}.`);
     } finally {
       setLoading(false);
     }
   };
 
+  const collectionsForTab = (tab: AdminTab): AdminDataKey[] => {
+    const core: AdminDataKey[] = ['registrations', 'submissions', 'judges', 'auditLogs', 'finalists'];
+    if (tab === 'overview') return core;
+    if (tab === 'attendance') return ['registrations', 'volunteers', 'attendanceLists', 'attendanceMarks'];
+    if (tab === 'announcements') return ['registrations', 'announcements', 'finalists'];
+    if (tab === 'users') return ['registrations', 'userProfiles'];
+    if (tab === 'audit') return ['auditLogs'];
+    if (['teams', 'assignments', 'reviews', 'leaderboard', 'finalists'].includes(tab)) return ['registrations', 'submissions', 'judges', 'assignments', 'scores', 'finalists'];
+    if (tab === 'rounds') return ['registrations'];
+    if (tab === 'judges') return ['judges'];
+    return [];
+  };
+
+  const refreshData = async (force = false) => {
+    if (!isAdmin) { setLoading(false); return; }
+    hydrateCache();
+    await loadCollections(collectionsForTab(activeTab), force);
+  };
+
   useEffect(() => {
     void refreshData();
-  }, [isAdmin]);
+  }, [isAdmin, activeTab]);
 
   useEffect(() => {
-    if (!isAdmin) return;
-
-    const unsubscribe = onSnapshot(
-      doc(db, landingContentCollection, landingContentDocId),
-      snapshot => {
-        const nextContent = snapshot.exists()
-          ? normalizeLandingContent(snapshot.data() as LandingEditorContent)
-          : defaultLandingContent;
-        setLandingDraft(nextContent);
-        setSelectedLandingSectionId(prev => (
-          nextContent.sections.some(section => section.id === prev)
-            ? prev
-            : nextContent.sections[0]?.id || ''
-        ));
-      },
-      err => {
-        setError(err instanceof Error ? err.message : 'Could not load landing page editor.');
-      },
-    );
-
-    return unsubscribe;
-  }, [isAdmin]);
+    if (!isAdmin || activeTab !== 'landing') return;
+    void getDoc(doc(db, landingContentCollection, landingContentDocId)).then(snapshot => {
+      setLandingPublished(snapshot.exists() ? normalizeLandingContent(snapshot.data() as LandingEditorContent) : defaultLandingContent);
+    }).catch(err => setError(err instanceof Error ? err.message : 'Could not load landing page editor.'));
+  }, [isAdmin, activeTab]);
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!isAdmin || activeTab !== 'landing') return;
+    void getDoc(doc(db, landingContentCollection, landingDraftDocId)).then(snapshot => {
+      const nextContent = snapshot.exists() ? normalizeLandingContent(snapshot.data() as LandingEditorContent) : landingPublished;
+      setLandingDraft(nextContent);
+      setSelectedLandingSectionId(prev => prev === 'header' || prev === 'hero' || prev === 'footer' || nextContent.sections.some(section => section.id === prev) ? prev : 'hero');
+    }).catch(err => setLandingEditorError(err instanceof Error ? err.message : 'Could not load landing page draft.'));
+  }, [isAdmin, activeTab, landingPublished]);
 
-    const unsubscribe = onSnapshot(
-      doc(db, formSettingsCollection, formSettingsDocId),
-      snapshot => {
-        setFormDraft(snapshot.exists() ? normalizeFormSettings(snapshot.data()) : defaultFormSettings);
-      },
-      err => {
-        setError(err instanceof Error ? err.message : 'Could not load form settings.');
-      },
-    );
-
-    return unsubscribe;
-  }, [isAdmin]);
+  useEffect(() => {
+    if (!isAdmin || activeTab !== 'forms') return;
+    void getDoc(doc(db, formSettingsCollection, formSettingsDocId)).then(snapshot => {
+      setFormDraft(snapshot.exists() ? normalizeFormSettings(snapshot.data()) : defaultFormSettings);
+    }).catch(err => setError(err instanceof Error ? err.message : 'Could not load form settings.'));
+  }, [isAdmin, activeTab]);
 
   const logAction = async (action: string) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -588,54 +582,49 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
     setAuditLogs(prev => [{ id, action, adminName, createdAt: new Date().toISOString() }, ...prev].slice(0, 80));
   };
 
-  const updateLandingSection = (sectionId: string, patch: Partial<LandingEditorSection>) => {
-    setLandingDraft(prev => ({
-      ...prev,
-      sections: prev.sections.map(section => section.id === sectionId ? { ...section, ...patch } : section),
-    }));
+  const landingPayload = (statusLabel: string): LandingEditorContent => {
+    const cleanDraft = JSON.parse(JSON.stringify(landingDraft)) as LandingEditorContent;
+    const selectedSection = landingDraft.sections.find(section => section.id === selectedLandingSectionId);
+    return {
+      ...cleanDraft,
+      sections: cleanDraft.sections.map((section, index) => ({ ...section, order: index + 1 })),
+      updatedAt: serverTimestamp(),
+      updatedBy: adminName,
+      updatedByEmail: user?.email || '',
+      updatedSection: selectedSection?.title || statusLabel,
+    };
   };
 
-  const addLandingSection = () => {
-    const nextOrder = Math.max(0, ...landingDraft.sections.map(section => section.order || 0)) + 1;
-    const nextSection = createLandingSection(nextOrder);
-    setLandingDraft(prev => ({ ...prev, sections: [...prev.sections, nextSection] }));
-    setSelectedLandingSectionId(nextSection.id);
-  };
-
-  const removeLandingSection = (sectionId: string) => {
-    const nextSections = landingDraft.sections.filter(section => section.id !== sectionId);
-    setLandingDraft(prev => ({ ...prev, sections: nextSections }));
-    setSelectedLandingSectionId(nextSections[0]?.id || '');
-  };
-
-  const moveLandingSection = (sectionId: string, direction: 'up' | 'down') => {
-    const sorted = [...landingDraft.sections].sort((a, b) => a.order - b.order);
-    const currentIndex = sorted.findIndex(section => section.id === sectionId);
-    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= sorted.length) return;
-    const next = [...sorted];
-    [next[currentIndex], next[targetIndex]] = [next[targetIndex], next[currentIndex]];
-    setLandingDraft(prev => ({
-      ...prev,
-      sections: next.map((section, index) => ({ ...section, order: index + 1 })),
-    }));
-  };
-
-  const saveLandingContent = async () => {
-    await runAdminWrite('Publish landing page', async () => {
-      const selectedSection = landingDraft.sections.find(section => section.id === selectedLandingSectionId);
-      const payload: LandingEditorContent = {
-        ...landingDraft,
-        sections: landingDraft.sections.map((section, index) => ({ ...section, order: index + 1 })),
-        updatedAt: serverTimestamp(),
-        updatedBy: adminName,
-        updatedByEmail: user?.email || '',
-        updatedSection: selectedSection?.title || 'Landing page',
-      };
-      await setDoc(doc(db, landingContentCollection, landingContentDocId), payload, { merge: true });
-      await logAction(`Published landing page content${selectedSection?.title ? `: ${selectedSection.title}` : ''}`);
-      setToastMessage('Landing page content published.');
+  const saveLandingDraft = async () => {
+    setLandingSaveState('saving');
+    setLandingEditorError('');
+    const ok = await runAdminWrite('Save landing draft', async () => {
+      await setDoc(doc(db, landingContentCollection, landingDraftDocId), landingPayload('Landing draft'), { merge: true });
+      await logAction('Saved landing page draft');
+      setLandingSaveState('saved');
+      setToastMessage('Landing page draft saved.');
     });
+    if (!ok) {
+      setLandingSaveState('error');
+      setLandingEditorError('Draft could not be saved. Check admin permissions and Firestore rules.');
+    }
+  };
+
+  const publishLandingContent = async () => {
+    setLandingSaveState('publishing');
+    setLandingEditorError('');
+    const ok = await runAdminWrite('Publish landing page', async () => {
+      const payload = landingPayload('Landing page');
+      await setDoc(doc(db, landingContentCollection, landingContentDocId), payload, { merge: true });
+      await setDoc(doc(db, landingContentCollection, landingDraftDocId), payload, { merge: true });
+      await logAction(`Published landing page content: ${payload.updatedSection || 'Landing page'}`);
+      setLandingSaveState('published');
+      setToastMessage('Landing page published.');
+    });
+    if (!ok) {
+      setLandingSaveState('error');
+      setLandingEditorError('Landing page could not be published. Check admin permissions and Firestore rules.');
+    }
   };
 
   const saveFormSettings = async () => {
@@ -685,13 +674,19 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
     event.preventDefault();
     const title = attendanceListForm.title.trim();
     if (!title) return;
+    const id = title.trim().replace(/\s+/g, '-').toLowerCase();
+
+    if (attendanceLists.some(list => list.id === id)) {
+      setToastMessage('Section label already taken. Use a different section name.');
+      return;
+    }
 
     await runAdminWrite('Save attendance list', async () => {
-      const id = title.trim().replace(/\s+/g, '-').toLowerCase();
       const payload: Omit<AttendanceList, 'id'> = {
         title,
         description: attendanceListForm.description?.trim() || '',
         active: attendanceListForm.active,
+        type: attendanceListForm.type || 'custom',
         color: attendanceListForm.color || 'mint',
         updatedAt: serverTimestamp(),
         createdAt: serverTimestamp(),
@@ -741,6 +736,47 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
     });
   };
 
+  const deleteVolunteer = async (volunteer: Volunteer) => {
+    if (!window.confirm(`Delete volunteer "${volunteer.name || volunteer.email}"? Their existing attendance marks will remain for audit history.`)) return;
+
+    await runAdminWrite('Delete volunteer', async () => {
+      await deleteDoc(doc(db, 'volunteers', volunteer.id));
+      setVolunteers(prev => prev.filter(item => item.id !== volunteer.id));
+      await logAction(`Deleted volunteer ${volunteer.email}`);
+      sessionStorage.removeItem(ADMIN_CACHE_KEY);
+      setToastMessage('Volunteer deleted.');
+    });
+  };
+
+  const deleteAttendanceList = async (list: AttendanceList) => {
+    const listMarks = attendanceMarks.filter(mark => mark.listId === list.id);
+    if (!window.confirm(`Delete section "${list.title}" and ${listMarks.length} attendance mark${listMarks.length === 1 ? '' : 's'}?`)) return;
+
+    await runAdminWrite('Delete attendance list', async () => {
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'attendanceLists', list.id));
+      listMarks.forEach(mark => batch.delete(doc(db, 'attendanceMarks', mark.id)));
+      volunteers
+        .filter(volunteer => volunteer.allowedListIds.includes(list.id))
+        .forEach(volunteer => {
+          batch.update(doc(db, 'volunteers', volunteer.id), {
+            allowedListIds: volunteer.allowedListIds.filter(id => id !== list.id),
+            updatedAt: serverTimestamp(),
+          });
+        });
+      await batch.commit();
+      setAttendanceLists(prev => prev.filter(item => item.id !== list.id));
+      setAttendanceMarks(prev => prev.filter(mark => mark.listId !== list.id));
+      setVolunteers(prev => prev.map(volunteer => ({
+        ...volunteer,
+        allowedListIds: volunteer.allowedListIds.filter(id => id !== list.id),
+      })));
+      await logAction(`Deleted attendance section ${list.title}`);
+      sessionStorage.removeItem(ADMIN_CACHE_KEY);
+      setToastMessage('Attendance section deleted.');
+    });
+  };
+
   const submissionByTeamId = useMemo(() => {
     return submissions.reduce<Record<string, IdeaSubmission>>((acc, submission) => {
       if (submission.userId) acc[submission.userId] = submission;
@@ -750,6 +786,13 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
       return acc;
     }, {});
   }, [submissions]);
+
+  const submissionForTeam = (team: StoredRegistration) => (
+    submissionByTeamId[team.userId]
+    || submissionByTeamId[team.id]
+    || submissionByTeamId[team.registrationId || '']
+    || submissionByTeamId[team.teamNameKey || '']
+  );
 
   const assignmentByTeamId = useMemo(() => {
     return assignments.reduce<Record<string, Assignment[]>>((acc, assignment) => {
@@ -775,7 +818,7 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
   const reviewStatusForTeam = (registration: StoredRegistration): ReviewStatus => {
     const savedStatus = (registration as StoredRegistration & { reviewStatus?: ReviewStatus }).reviewStatus;
     if (savedStatus) return savedStatus;
-    const submission = submissionByTeamId[registration.userId] || submissionByTeamId[registration.id];
+    const submission = submissionForTeam(registration);
     if (!submission) return 'pending';
     return (submission.status === 'submitted' ? 'under-review' : 'pending') as ReviewStatus;
   };
@@ -825,7 +868,7 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
 
   const filteredTeams = useMemo(() => {
     return registrations.filter(registration => {
-      const submission = submissionByTeamId[registration.userId] || submissionByTeamId[registration.id];
+      const submission = submissionForTeam(registration);
       const haystack = `${registration.teamName} ${registration.leaderName} ${registration.leaderEmail} ${registration.location} ${registration.collegeName}`.toLowerCase();
       const matchesSearch = !search || haystack.includes(search.toLowerCase());
       const matchesDistrict = !districtFilter || registration.location === districtFilter;
@@ -841,17 +884,42 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
     return registrations
       .map(registration => ({
         registration,
-        submission: submissionByTeamId[registration.userId] || submissionByTeamId[registration.id],
+        submission: submissionForTeam(registration),
         average: averageScore(registration.id),
         judgeCount: new Set((scoresByTeamId[registration.id] || []).map(score => score.judgeId)).size,
       }))
       .sort((a, b) => b.average - a.average);
   }, [registrations, scoresByTeamId, submissionByTeamId]);
 
+  const submittedAssignmentTeams = useMemo(
+    () => registrations.filter(registration => submissionForTeam(registration)?.status === 'submitted'),
+    [registrations, submissionByTeamId],
+  );
+  const assignmentEligibleTeams = useMemo(
+    () => submittedAssignmentTeams.filter(team => (
+      reviewStatusForTeam(team) !== 'rejected'
+      && roundForTeam(team) === assignmentRound
+    )),
+    [assignmentRound, submittedAssignmentTeams],
+  );
+
   const selectedTeam = registrations.find(registration => registration.id === selectedTeamId) || filteredTeams[0];
-  const selectedSubmission = selectedTeam ? submissionByTeamId[selectedTeam.userId] || submissionByTeamId[selectedTeam.id] : undefined;
+  const selectedSubmission = selectedTeam ? submissionForTeam(selectedTeam) : undefined;
   const selectedScores = selectedTeam ? scoresByTeamId[selectedTeam.id] || [] : [];
   const selectedAssignments = selectedTeam ? assignmentByTeamId[selectedTeam.id] || [] : [];
+
+  useEffect(() => {
+    const eligibleIds = new Set(assignmentEligibleTeams.map(team => team.id));
+    setSelectedAssignmentTeams(prev => prev.filter(teamId => eligibleIds.has(teamId)));
+  }, [assignmentEligibleTeams]);
+
+  useEffect(() => {
+    if (!assignmentJudgeId) return;
+    const alreadyAssignedIds = new Set(assignments
+      .filter(assignment => assignment.judgeId === assignmentJudgeId && assignment.round === assignmentRound)
+      .map(assignment => assignment.teamId));
+    setSelectedAssignmentTeams(prev => prev.filter(teamId => !alreadyAssignedIds.has(teamId)));
+  }, [assignmentJudgeId, assignmentRound, assignments]);
 
   const setToastMessage = (message: string) => {
     setToast(message);
@@ -862,8 +930,10 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
     setError('');
     try {
       await action();
+      return true;
     } catch (err) {
       setError(adminWriteError(err, `${label} failed.`));
+      return false;
     }
   };
 
@@ -926,15 +996,44 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
   };
 
   const updateTeamStatus = async (registration: StoredRegistration, status: ReviewStatus) => {
+    if (reviewStatusForTeam(registration) === 'rejected' && status !== 'rejected') {
+      setToastMessage(`${registration.teamName} is already rejected. Rejection is final for this event.`);
+      return;
+    }
+    if (status === 'approved') {
+      const currentRound = roundForTeam(registration);
+      const currentAssignments = assignments.filter(assignment => assignment.teamId === registration.id && assignment.round === currentRound);
+      if (!currentAssignments.length) {
+        setToastMessage(`Assign at least one judge to ${registration.teamName} in ${currentRound} before approval.`);
+        return;
+      }
+      const pendingCount = currentAssignments.filter(assignment => assignment.status !== 'completed').length;
+      if (pendingCount) {
+        setToastMessage(`Complete ${pendingCount} pending judge review${pendingCount === 1 ? '' : 's'} before approving ${registration.teamName}.`);
+        return;
+      }
+    }
     await runAdminWrite('Update review status', async () => {
-      await updateDoc(doc(db, 'registrations', registration.id), {
+      const pendingAssignments = status === 'rejected'
+        ? assignments.filter(assignment => assignment.teamId === registration.id && assignment.status === 'pending')
+        : [];
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'registrations', registration.id), {
         reviewStatus: status,
         updatedAt: serverTimestamp(),
       });
+      pendingAssignments.forEach(assignment => batch.delete(doc(db, 'judgeAssignments', assignment.id)));
+      await batch.commit();
       await logAction(`Marked ${registration.teamName} as ${status}`);
       setRegistrations(prev => prev.map(item => item.id === registration.id ? { ...item, reviewStatus: status } : item));
+      if (status === 'rejected') {
+        setAssignments(prev => prev.filter(assignment => !pendingAssignments.some(pending => pending.id === assignment.id)));
+        setSelectedAssignmentTeams(prev => prev.filter(teamId => teamId !== registration.id));
+      }
       sessionStorage.removeItem(ADMIN_CACHE_KEY);
-      setToastMessage(`Team ${status}.`);
+      setToastMessage(status === 'rejected' && pendingAssignments.length
+        ? `Team rejected and ${pendingAssignments.length} pending assignment${pendingAssignments.length === 1 ? '' : 's'} removed.`
+        : `Team ${status}.`);
     });
   };
 
@@ -944,11 +1043,22 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
       setToastMessage('Select a team and judge before saving a score.');
       return;
     }
+    const scoringTeam = registrations.find(team => team.id === scoreForm.teamId);
+    if (!scoringTeam || reviewStatusForTeam(scoringTeam) === 'rejected' || roundForTeam(scoringTeam) !== scoreForm.round) {
+      setToastMessage('This team is rejected or is not active in the selected round.');
+      return;
+    }
 
     await runAdminWrite('Save score', async () => {
       const id = `${scoreForm.judgeId}_${scoreForm.teamId}_${roundDocId(scoreForm.round)}`;
+      const matchingAssignment = assignments.find(assignment => (
+        assignment.teamId === scoreForm.teamId
+        && assignment.judgeId === scoreForm.judgeId
+        && assignment.round === scoreForm.round
+      ));
       const payload = {
         ...scoreForm,
+        ...(matchingAssignment ? { assignmentId: matchingAssignment.id } : {}),
         innovation: Number(scoreForm.innovation),
         problemRelevance: Number(scoreForm.problemRelevance),
         feasibility: Number(scoreForm.feasibility),
@@ -959,10 +1069,22 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
         presentation: Number(scoreForm.presentation),
         createdAt: serverTimestamp(),
       };
-      await setDoc(doc(db, 'scores', id), payload, { merge: true });
-      const nextScore: Score = { id, ...scoreForm };
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'scores', id), payload, { merge: true });
+      if (matchingAssignment) {
+        batch.update(doc(db, 'judgeAssignments', matchingAssignment.id), {
+          status: 'completed',
+          reviewedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      await batch.commit();
+      const nextScore: Score = { id, ...scoreForm, ...(matchingAssignment ? { assignmentId: matchingAssignment.id } : {}) };
       await logAction(`Saved score for ${registrations.find(team => team.id === scoreForm.teamId)?.teamName || scoreForm.teamId}`);
       setScores(prev => [nextScore, ...prev.filter(score => score.id !== id)]);
+      if (matchingAssignment) {
+        setAssignments(prev => prev.map(assignment => assignment.id === matchingAssignment.id ? { ...assignment, status: 'completed' } : assignment));
+      }
       setScoreForm(blankScoreForm);
       sessionStorage.removeItem(ADMIN_CACHE_KEY);
       setToastMessage('Score saved.');
@@ -1008,12 +1130,28 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
       setToastMessage('Select at least one team to assign.');
       return;
     }
+    const submittedTeamIds = new Set(assignmentEligibleTeams.map(team => team.id));
+    const blockedTeamNames = selectedAssignmentTeams
+      .filter(teamId => !submittedTeamIds.has(teamId))
+      .map(teamId => registrations.find(team => team.id === teamId)?.teamName || teamId);
+    if (blockedTeamNames.length) {
+      setToastMessage(`These teams are rejected or not active in ${assignmentRound}: ${blockedTeamNames.join(', ')}`);
+      return;
+    }
+
+    const duplicateTeamNames = selectedAssignmentTeams
+      .filter(teamId => assignments.some(assignment => assignment.judgeId === assignmentJudgeId && assignment.teamId === teamId && assignment.round === assignmentRound))
+      .map(teamId => registrations.find(team => team.id === teamId)?.teamName || teamId);
+    if (duplicateTeamNames.length) {
+      setToastMessage(`Already assigned to this judge in ${assignmentRound}: ${duplicateTeamNames.join(', ')}`);
+      return;
+    }
 
     await runAdminWrite('Assign teams', async () => {
       const batch = writeBatch(db);
       const newAssignments: Assignment[] = selectedAssignmentTeams.map(teamId => {
         const team = registrations.find(item => item.id === teamId);
-        const submission = team ? submissionByTeamId[team.userId] || submissionByTeamId[team.id] : undefined;
+        const submission = team ? submissionForTeam(team) : undefined;
         const id = `${assignmentJudgeId}_${teamId}_${roundDocId(assignmentRound)}`;
         const assignment: Assignment = {
           id,
@@ -1059,7 +1197,12 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
         };
         batch.set(doc(db, 'judgeAssignments', id), { ...assignment, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }, { merge: true });
         if (team) {
-          batch.set(doc(db, 'registrations', team.id), { assignedJudgeIds: arrayUnion(assignmentJudgeId), updatedAt: serverTimestamp() }, { merge: true });
+          batch.set(doc(db, 'registrations', team.id), {
+            assignedJudgeIds: arrayUnion(assignmentJudgeId),
+            currentRound: assignmentRound,
+            reviewStatus: 'under-review',
+            updatedAt: serverTimestamp(),
+          }, { merge: true });
         }
         return assignment;
       });
@@ -1070,6 +1213,9 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
       await batch.commit();
       await logAction(`Assigned ${selectedAssignmentTeams.length} teams to ${judges.find(judge => judge.id === assignmentJudgeId)?.name || 'judge'}`);
       setAssignments(prev => [...newAssignments, ...prev.filter(item => !newAssignments.some(next => next.id === item.id))]);
+      setRegistrations(prev => prev.map(team => selectedAssignmentTeams.includes(team.id)
+        ? { ...team, currentRound: assignmentRound, reviewStatus: 'under-review' }
+        : team));
       setJudges(prev => prev.map(judge => judge.id === assignmentJudgeId ? { ...judge, assignedTeamIds: nextAssignedTeamIds } : judge));
       setSelectedAssignmentTeams([]);
       sessionStorage.removeItem(ADMIN_CACHE_KEY);
@@ -1157,6 +1303,10 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
   };
 
   const toggleFinalist = async (registration: StoredRegistration) => {
+    if (reviewStatusForTeam(registration) === 'rejected') {
+      setToastMessage('Rejected teams cannot be selected as finalists.');
+      return;
+    }
     await runAdminWrite('Update finalist', async () => {
       const exists = finalists.some(finalist => finalist.teamId === registration.id);
       if (exists) {
@@ -1180,10 +1330,38 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
   };
 
   const moveRound = async (registration: StoredRegistration, round: RoundName) => {
+    const currentRound = roundForTeam(registration);
+    const expectedNextRound = nextRoundForTeam(registration);
+    const status = reviewStatusForTeam(registration);
+    if (status === 'rejected') {
+      setToastMessage(`${registration.teamName} is rejected and cannot move to another round.`);
+      return;
+    }
+    const currentAssignments = assignments.filter(assignment => assignment.teamId === registration.id && assignment.round === currentRound);
+    if (!currentAssignments.length || currentAssignments.some(assignment => assignment.status !== 'completed')) {
+      const pendingCount = currentAssignments.filter(assignment => assignment.status !== 'completed').length;
+      setToastMessage(!currentAssignments.length
+        ? `Assign and complete a judge review for ${registration.teamName} in ${currentRound} first.`
+        : `${pendingCount} judge review${pendingCount === 1 ? ' is' : 's are'} still pending in ${currentRound}.`);
+      return;
+    }
+    if (status !== 'approved') {
+      setToastMessage(`Approve ${registration.teamName} in ${currentRound} before advancing.`);
+      return;
+    }
+    if (!expectedNextRound || round !== expectedNextRound) {
+      setToastMessage(`${registration.teamName} can only advance from ${currentRound}${expectedNextRound ? ` to ${expectedNextRound}` : '; Round 3 is final'}.`);
+      return;
+    }
     await runAdminWrite('Move round', async () => {
-      await updateDoc(doc(db, 'registrations', registration.id), { currentRound: round, updatedAt: serverTimestamp() });
+      await updateDoc(doc(db, 'registrations', registration.id), {
+        currentRound: round,
+        reviewStatus: 'under-review',
+        updatedAt: serverTimestamp(),
+      });
       await logAction(`Moved ${registration.teamName} to ${round}`);
-      setRegistrations(prev => prev.map(item => item.id === registration.id ? { ...item, currentRound: round } : item));
+      setRegistrations(prev => prev.map(item => item.id === registration.id ? { ...item, currentRound: round, reviewStatus: 'under-review' } : item));
+      setSelectedAssignmentTeams(prev => prev.filter(teamId => teamId !== registration.id));
       sessionStorage.removeItem(ADMIN_CACHE_KEY);
       setToastMessage(`${registration.teamName} moved to ${round}.`);
     });
@@ -1275,7 +1453,7 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
 
   if (!isAdmin) {
     return (
-      <main className="min-h-screen bg-slate-50 px-4 pb-16 pt-28 text-slate-950 md:px-8">
+      <main className="min-h-screen bg-slate-50 p-4 text-slate-950 md:p-8">
         <div className="mx-auto max-w-3xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
           <button type="button" onClick={onBack} className="mb-6 inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-slate-950">
             <ArrowLeft className="w-4 h-4" /> Back to event
@@ -1300,6 +1478,8 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
   const navItems: Array<{ id: AdminTab; label: string; icon: ReactNode }> = [
     { id: 'overview', label: 'Overview', icon: <BarChart3 className="h-4 w-4" /> },
     { id: 'landing', label: 'Landing Editor', icon: <Monitor className="h-4 w-4" /> },
+    { id: 'form-builder', label: 'Form Builder', icon: <PlusCircle className="h-4 w-4" /> },
+    { id: 'form-submissions', label: 'Form Submissions', icon: <Download className="h-4 w-4" /> },
     { id: 'forms', label: 'Form Settings', icon: <FileText className="h-4 w-4" /> },
     { id: 'teams', label: 'Teams', icon: <Users className="h-4 w-4" /> },
     { id: 'attendance', label: 'Attendance', icon: <CheckCircle2 className="h-4 w-4" /> },
@@ -1313,49 +1493,78 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
     { id: 'users', label: 'Login Users', icon: <UserCheck className="h-4 w-4" /> },
     { id: 'audit', label: 'Audit', icon: <ShieldCheck className="h-4 w-4" /> },
   ];
+  const activeNavItem = navItems.find(item => item.id === activeTab) || navItems[0];
+  const publicNavItems = [
+    { label: 'Domains', href: '/#tracks' },
+    { label: 'Stages', href: '/#schedule' },
+    { label: 'Prizes', href: '/#prizes' },
+    { label: 'Mentors', href: '/#mentors' },
+    { label: 'FAQ', href: '/#faq' },
+  ];
 
   return (
-    <main className="admin-print-section min-h-screen bg-slate-50 px-4 pb-16 pt-28 text-slate-950 md:px-8">
-      <div className="mx-auto max-w-7xl space-y-6">
+    <main className="admin-print-section min-h-screen w-full bg-[#f7f5ef] text-slate-950">
+      <header className="sticky top-0 z-50 border-b-2 border-[#191A23] bg-[#fbf8f1]/95 px-3 py-3 backdrop-blur-xl sm:px-5 lg:px-8">
+        <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4">
+          <button type="button" onClick={onBack} className="flex flex-none items-center gap-3" aria-label="Back to event">
+            <span className="grid h-11 min-w-14 place-items-center rounded-2xl border-2 border-[#191A23] bg-[#b9efc8] px-3 font-mono text-lg font-black shadow-[0_4px_0_#191A23]">SDG</span>
+            <span className="hidden text-xl font-black tracking-tight text-[#252323] sm:block">Kahab</span>
+          </button>
+
+          <nav className="hidden min-w-0 items-center gap-1 rounded-full border-2 border-[#191A23] bg-[#211f1f] p-1.5 text-white shadow-[0_5px_0_rgba(25,26,35,0.2)] xl:flex">
+            <span className="inline-flex items-center gap-2 rounded-full px-4 py-2.5 text-xs font-bold"><ShieldCheck className="h-4 w-4" /> Admin</span>
+            {publicNavItems.map(item => <a key={item.label} href={item.href} className="rounded-full px-3 py-2.5 text-xs font-bold text-white/90 transition hover:bg-[rgba(255,255,255,0.1)] hover:text-white">{item.label}</a>)}
+            <button type="button" className="rounded-full bg-[rgba(255,255,255,0.1)] px-3 py-2.5 text-xs font-bold text-[#b9efc8]" onClick={() => setActiveTab('overview')}>Control Room</button>
+            <a href="/volunteer" className="rounded-full px-3 py-2.5 text-xs font-bold text-white/90 transition hover:bg-[rgba(255,255,255,0.1)]">Volunteer</a>
+            <a href="/register" className="rounded-full border border-[#191A23] bg-[#b9efc8] px-4 py-2.5 text-xs font-black text-[#191A23] transition hover:-translate-y-0.5">Register</a>
+          </nav>
+
+          <div className="flex flex-none items-center gap-2 rounded-full border border-[#191A23] bg-white py-1.5 pl-1.5 pr-4 shadow-[0_3px_0_rgba(25,26,35,0.18)]">
+            <span className="rounded-full border border-slate-300 bg-white p-0.5"><AppleStyleAvatar size="sm" variant="admin" imageUrl={user?.photoURL} /></span>
+            <span className="hidden min-w-0 sm:block"><span className="block max-w-28 truncate text-sm font-black leading-tight">{user?.displayName || 'Admin'}</span><span className="block text-[10px] font-semibold text-slate-500">Event Manager</span></span>
+          </div>
+        </div>
+
+        <nav className="mt-3 flex gap-1 overflow-x-auto rounded-full bg-[#211f1f] p-1.5 text-white xl:hidden">
+          <span className="inline-flex flex-none items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold"><ShieldCheck className="h-3.5 w-3.5" /> Admin</span>
+          {publicNavItems.map(item => <a key={item.label} href={item.href} className="flex-none rounded-full px-3 py-2 text-xs font-bold text-white/85">{item.label}</a>)}
+          <a href="/volunteer" className="flex-none rounded-full px-3 py-2 text-xs font-bold">Volunteer</a>
+          <a href="/register" className="flex-none rounded-full bg-[#b9efc8] px-4 py-2 text-xs font-black text-[#191A23]">Register</a>
+        </nav>
+      </header>
+
+      <div className="w-full space-y-4 p-3 sm:p-5">
         {toast && (
-          <div className="fixed right-4 top-24 z-50 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 shadow-lg">
+          <div className="fixed right-4 top-36 z-[60] rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 shadow-lg xl:top-24">
             {toast}
           </div>
         )}
 
-        <header className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div className="space-y-3">
-            <button type="button" onClick={onBack} className="inline-flex items-center gap-2 text-sm font-semibold text-slate-500 hover:text-slate-950">
-              <ArrowLeft className="w-4 h-4" /> Back to event
-            </button>
-            <span className="inline-flex w-fit items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm">
-              <ShieldCheck className="w-4 h-4" /> Admin Dashboard
-            </span>
-            <h1 className="text-4xl font-semibold tracking-tight md:text-5xl">Challenge Control Room</h1>
-            <p className="max-w-2xl text-sm font-medium leading-relaxed text-slate-500">
-              Manage registrations, judges, reviews, scoring, finalists, announcements, and reports from one clean admin workspace.
-            </p>
+        <section className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-4">
+          <div className="flex items-center gap-3">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-slate-950 text-white">{activeNavItem.icon}</span>
+            <span><span className="block text-sm font-black">{activeNavItem.label}</span><span className="block text-xs font-medium text-slate-500">Admin workspace</span></span>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <button type="button" onClick={() => refreshData(true)} className="admin-secondary-btn inline-flex items-center justify-center gap-2 px-5 py-3 text-sm">
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => refreshData(true)} className="admin-secondary-btn inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs">
               <RefreshCw className="w-4 h-4" /> Refresh
             </button>
-            <button type="button" onClick={handleCsvDownload} className="admin-primary-btn inline-flex items-center justify-center gap-2 px-5 py-3 text-sm">
+            <button type="button" onClick={handleCsvDownload} className="admin-primary-btn inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs">
               <Download className="w-4 h-4" /> CSV
             </button>
-            <button type="button" onClick={handlePrint} className="admin-secondary-btn inline-flex items-center justify-center gap-2 px-5 py-3 text-sm">
+            <button type="button" onClick={handlePrint} className="admin-secondary-btn inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs">
               <Printer className="w-4 h-4" /> Print
             </button>
           </div>
-        </header>
+        </section>
 
-        <nav className="flex gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-1.5 shadow-sm">
+        <nav className="sticky top-[132px] z-30 flex gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-white/95 p-1.5 shadow-sm backdrop-blur xl:top-[82px]">
           {navItems.map(item => (
             <button
               key={item.id}
               type="button"
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => item.id === 'landing' ? onOpenLandingEditor() : setActiveTab(item.id)}
               className={`inline-flex min-h-10 flex-none items-center gap-2 rounded-xl px-3 text-xs font-semibold transition ${
                 activeTab === item.id ? 'bg-slate-950 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
               }`}
@@ -1382,15 +1591,19 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
               />
             )}
             {activeTab === 'landing' && (
-              <LandingEditorTab
+              <LandingEditorPage
                 content={landingDraft}
-                selectedSectionId={selectedLandingSectionId}
-                setSelectedSectionId={setSelectedLandingSectionId}
-                onUpdateSection={updateLandingSection}
-                onAddSection={addLandingSection}
-                onRemoveSection={removeLandingSection}
-                onMoveSection={moveLandingSection}
-                onSave={saveLandingContent}
+                selectedBlockId={selectedLandingSectionId}
+                onSelectBlock={setSelectedLandingSectionId}
+                onChange={(nextContent) => {
+                  setLandingDraft(normalizeLandingContent(nextContent));
+                  setLandingSaveState('idle');
+                }}
+                onSaveDraft={saveLandingDraft}
+                onPublish={publishLandingContent}
+                saveState={landingSaveState}
+                error={landingEditorError}
+                updatedLabel={formatDate(landingDraft.updatedAt) || 'Not saved yet'}
               />
             )}
             {activeTab === 'forms' && (
@@ -1400,6 +1613,8 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
                 onSave={saveFormSettings}
               />
             )}
+            {activeTab === 'form-builder' && <FormBuilderTab />}
+            {activeTab === 'form-submissions' && <FormSubmissionsTab />}
             {activeTab === 'teams' && (
               <TeamsTab
                 teams={filteredTeams}
@@ -1444,6 +1659,8 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
                 onToggleVolunteerList={toggleVolunteerList}
                 onToggleVolunteerActive={toggleVolunteerActive}
                 onToggleListActive={toggleAttendanceListActive}
+                onDeleteVolunteer={deleteVolunteer}
+                onDeleteList={deleteAttendanceList}
               />
             )}
             {activeTab === 'judges' && (
@@ -1469,7 +1686,8 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
             {activeTab === 'assignments' && (
               <AssignmentsTab
                 judges={judges}
-                teams={registrations}
+                teams={assignmentEligibleTeams}
+                totalTeams={registrations.length}
                 assignments={assignments}
                 assignmentJudgeId={assignmentJudgeId}
                 setAssignmentJudgeId={setAssignmentJudgeId}
@@ -1492,7 +1710,7 @@ export default function AdminPanel({ user, isAdmin, onBack, onLogin }: AdminPane
               />
             )}
             {activeTab === 'leaderboard' && <LeaderboardTab leaderboard={leaderboard} onExport={() => downloadCsv('shifa-sdg-leaderboard.csv', [['Rank', 'Team', 'Domain', 'Average Score', 'Judge Count', 'Status'], ...leaderboard.map((row, index) => [index + 1, row.registration.teamName, row.submission?.track || '', row.average, row.judgeCount, row.submission?.status || 'draft'])])} />}
-            {activeTab === 'rounds' && <RoundsTab teams={registrations} onMove={moveRound} onReject={(team) => updateTeamStatus(team, 'rejected')} />}
+            {activeTab === 'rounds' && <RoundsTab teams={submittedAssignmentTeams} reviewStatusForTeam={reviewStatusForTeam} onApprove={(team) => updateTeamStatus(team, 'approved')} onMove={moveRound} onReject={(team) => updateTeamStatus(team, 'rejected')} />}
             {activeTab === 'announcements' && <AnnouncementsTab form={announcementForm} setForm={setAnnouncementForm} onSubmit={saveAnnouncement} onDelete={deleteAnnouncement} announcements={announcements} teams={registrations} finalists={finalists} />}
             {activeTab === 'finalists' && <FinalistsTab leaderboard={leaderboard} finalists={finalists} onToggle={toggleFinalist} onExport={() => downloadCsv('shifa-sdg-finalists.csv', [['Team', 'Score', 'Domain'], ...leaderboard.filter(row => finalists.some(finalist => finalist.teamId === row.registration.id)).map(row => [row.registration.teamName, row.average, row.submission?.track || ''])])} />}
             {activeTab === 'users' && <UsersTab teams={registrations} userProfiles={userProfiles} onAccess={updateUserAccess} onDeleteUser={deleteDatabaseUser} />}
@@ -1521,6 +1739,35 @@ function OverviewTab({
   collegeCount: Record<string, number>;
   auditLogs: AuditLog[];
 }) {
+  const dateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const trendDays = Array.from({ length: 14 }, (_, index) => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - (13 - index));
+    return { key: dateKey(date), label: date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }), value: 0 };
+  });
+  const trendMap = new Map(trendDays.map((item, index) => [item.key, index]));
+  registrations.forEach(registration => {
+    const raw = registration.createdAt;
+    const date = raw && typeof raw === 'object' && 'toDate' in raw && typeof (raw as { toDate?: unknown }).toDate === 'function'
+      ? (raw as { toDate: () => Date }).toDate()
+      : raw ? new Date(String(raw)) : null;
+    if (!date || Number.isNaN(date.getTime())) return;
+    const index = trendMap.get(dateKey(date));
+    if (index !== undefined) trendDays[index].value += 1;
+  });
+  const submissionBreakdown = {
+    Submitted: submissions.filter(submission => submission.status === 'submitted').length,
+    Draft: submissions.filter(submission => submission.status !== 'submitted').length,
+    Missing: Math.max(registrations.length - submissions.length, 0),
+  };
+  const reviewBreakdown = {
+    Approved: registrations.filter(team => team.reviewStatus === 'approved').length,
+    'Under review': registrations.filter(team => team.reviewStatus === 'under-review').length,
+    'Needs revision': registrations.filter(team => team.reviewStatus === 'needs-revision').length,
+    Rejected: registrations.filter(team => team.reviewStatus === 'rejected').length,
+    Pending: registrations.filter(team => !team.reviewStatus || team.reviewStatus === 'pending').length,
+  };
   const cards = [
     ['Total Users', stats.totalUsers, <UserCheck className="h-5 w-5" />],
     ['Total Teams', stats.totalTeams, <Users className="h-5 w-5" />],
@@ -1540,21 +1787,16 @@ function OverviewTab({
         {cards.map(([label, value, icon]) => <StatCard key={String(label)} label={String(label)} value={Number(value)} icon={icon as ReactNode} />)}
       </div>
 
+      <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr_1fr]">
+        <TrendChartCard title="Registrations · Last 14 days" data={trendDays} />
+        <DonutChartCard title="Submission Progress" data={submissionBreakdown} colors={['#10b981', '#f59e0b', '#e2e8f0']} />
+        <DonutChartCard title="Review Status" data={reviewBreakdown} colors={['#10b981', '#6366f1', '#f59e0b', '#ef4444', '#cbd5e1']} />
+      </div>
+
       <div className="grid gap-5 xl:grid-cols-3">
-        <AnalyticsCard title="Registration Trends" data={registrations.slice(0, 8).reduce<Record<string, number>>((acc, registration) => {
-          const date = formatDate(registration.createdAt).slice(0, 10) || 'Recent';
-          acc[date] = (acc[date] || 0) + 1;
-          return acc;
-        }, {})} />
+        <AnalyticsCard title="Domain Distribution" data={domainCount} />
         <AnalyticsCard title="District Participation" data={districtCount} />
         <AnalyticsCard title="College Participation" data={collegeCount} />
-        <AnalyticsCard title="Domain Distribution" data={domainCount} />
-        <AnalyticsCard title="Submission Completion" data={{
-          Submitted: submissions.filter(submission => submission.status === 'submitted').length,
-          Draft: submissions.filter(submission => submission.status !== 'submitted').length,
-          Missing: Math.max(registrations.length - submissions.length, 0),
-        }} />
-        <AnalyticsCard title="Review Status" data={{ Pending: stats.pendingReviews, Approved: stats.approvedTeams, Rejected: stats.rejectedTeams }} />
       </div>
 
       <Panel title="Recent Activity Feed" icon={<Bell className="h-5 w-5" />}>
@@ -1569,190 +1811,6 @@ function OverviewTab({
         </div>
       </Panel>
     </div>
-  );
-}
-
-function LandingEditorTab({
-  content,
-  selectedSectionId,
-  setSelectedSectionId,
-  onUpdateSection,
-  onAddSection,
-  onRemoveSection,
-  onMoveSection,
-  onSave,
-}: {
-  content: LandingEditorContent;
-  selectedSectionId: string;
-  setSelectedSectionId: (value: string) => void;
-  onUpdateSection: (sectionId: string, patch: Partial<LandingEditorSection>) => void;
-  onAddSection: () => void;
-  onRemoveSection: (sectionId: string) => void;
-  onMoveSection: (sectionId: string, direction: 'up' | 'down') => void;
-  onSave: () => void;
-}) {
-  const sections = [...content.sections].sort((a, b) => a.order - b.order);
-  const selectedSection = sections.find(section => section.id === selectedSectionId) || sections[0];
-  const visibleCount = sections.filter(section => section.visible).length;
-
-  if (!selectedSection) {
-    return (
-      <Panel title="Landing Page Editor" icon={<Monitor className="h-5 w-5" />}>
-        <button type="button" onClick={onAddSection} className="admin-primary-btn inline-flex items-center gap-2 px-4 py-3 text-sm">
-          <PlusCircle className="h-4 w-4" /> Add first section
-        </button>
-      </Panel>
-    );
-  }
-
-  return (
-    <>
-      <div className="xl:hidden">
-        <Panel title="Landing Editor" icon={<Monitor className="h-5 w-5" />}>
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
-            <p className="text-sm font-semibold text-amber-900">Landing editor is available on desktop only.</p>
-            <p className="mt-2 text-sm font-medium leading-relaxed text-amber-800">
-              Use a larger screen to edit page sections, manage images, and preview layout changes.
-            </p>
-          </div>
-        </Panel>
-      </div>
-
-      <div className="hidden xl:grid xl:grid-cols-[300px_1fr_360px] xl:gap-5">
-        <Panel title="Sections" icon={<Monitor className="h-5 w-5" />}>
-          <div className="mb-4 grid grid-cols-2 gap-2">
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Total</p>
-              <p className="text-2xl font-semibold text-slate-950">{sections.length}</p>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Visible</p>
-              <p className="text-2xl font-semibold text-slate-950">{visibleCount}</p>
-            </div>
-          </div>
-
-          <div className="grid gap-2">
-            {sections.map(section => (
-              <button
-                key={section.id}
-                type="button"
-                onClick={() => setSelectedSectionId(section.id)}
-                className={`rounded-xl border p-3 text-left transition ${
-                  selectedSection.id === section.id
-                    ? 'border-slate-950 bg-slate-950 text-white'
-                    : 'border-slate-200 bg-white text-slate-700 hover:border-slate-400'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <p className="line-clamp-1 text-sm font-semibold">{section.title}</p>
-                  {section.visible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4 opacity-50" />}
-                </div>
-                <p className={`mt-1 line-clamp-1 text-xs font-medium ${selectedSection.id === section.id ? 'text-slate-300' : 'text-slate-400'}`}>
-                  {section.eyebrow || 'No eyebrow'} • {section.layout}
-                </p>
-              </button>
-            ))}
-          </div>
-
-          <button type="button" onClick={onAddSection} className="admin-primary-btn mt-4 flex w-full items-center justify-center gap-2 py-3 text-sm">
-            <PlusCircle className="h-4 w-4" /> Add section
-          </button>
-        </Panel>
-
-        <Panel title="Edit Selected Section" icon={<FileText className="h-5 w-5" />}>
-          <div className="grid gap-4">
-            <div className="grid grid-cols-2 gap-3">
-              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                Eyebrow
-                <input className="admin-input" value={selectedSection.eyebrow} onChange={event => onUpdateSection(selectedSection.id, { eyebrow: event.target.value })} />
-              </label>
-              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                Layout
-                <select className="admin-input" value={selectedSection.layout} onChange={event => onUpdateSection(selectedSection.id, { layout: event.target.value as LandingSectionLayout })}>
-                  <option value="feature">Feature with media right</option>
-                  <option value="split">Media emphasis</option>
-                  <option value="banner">Text banner only</option>
-                </select>
-              </label>
-            </div>
-
-            <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-              Title
-              <input className="admin-input" value={selectedSection.title} onChange={event => onUpdateSection(selectedSection.id, { title: event.target.value })} />
-            </label>
-
-            <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-              Body
-              <textarea className="admin-input min-h-32 resize-y" value={selectedSection.body} onChange={event => onUpdateSection(selectedSection.id, { body: event.target.value })} />
-            </label>
-
-            <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-              Image URL
-              <input className="admin-input" value={selectedSection.imageUrl} onChange={event => onUpdateSection(selectedSection.id, { imageUrl: event.target.value })} placeholder="https://..." />
-            </label>
-
-            <div className="grid grid-cols-2 gap-3">
-              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                CTA Label
-                <input className="admin-input" value={selectedSection.ctaLabel} onChange={event => onUpdateSection(selectedSection.id, { ctaLabel: event.target.value })} />
-              </label>
-              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                CTA Link
-                <input className="admin-input" value={selectedSection.ctaHref} onChange={event => onUpdateSection(selectedSection.id, { ctaHref: event.target.value })} />
-              </label>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button type="button" onClick={() => onUpdateSection(selectedSection.id, { visible: !selectedSection.visible })} className="admin-secondary-btn inline-flex items-center gap-2 px-4 py-2 text-xs">
-                {selectedSection.visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                {selectedSection.visible ? 'Hide section' : 'Show section'}
-              </button>
-              <button type="button" onClick={() => onMoveSection(selectedSection.id, 'up')} className="admin-secondary-btn inline-flex items-center gap-2 px-4 py-2 text-xs">
-                <ArrowUp className="h-4 w-4" /> Move up
-              </button>
-              <button type="button" onClick={() => onMoveSection(selectedSection.id, 'down')} className="admin-secondary-btn inline-flex items-center gap-2 px-4 py-2 text-xs">
-                <ArrowDown className="h-4 w-4" /> Move down
-              </button>
-              <button type="button" onClick={() => onRemoveSection(selectedSection.id)} className="mini-btn bg-red-50 text-red-700">
-                <Trash2 className="h-3 w-3" /> Delete
-              </button>
-            </div>
-
-            <button type="button" onClick={onSave} className="admin-primary-btn inline-flex w-fit items-center gap-2 px-5 py-3 text-sm">
-              <Save className="h-4 w-4" /> Publish changes
-            </button>
-          </div>
-        </Panel>
-
-        <div className="space-y-5">
-          <Panel title="Last Updated" icon={<ShieldCheck className="h-5 w-5" />}>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Published by</p>
-              <p className="mt-1 break-words text-sm font-semibold text-slate-950">{content.updatedBy || 'Not published yet'}</p>
-              {content.updatedByEmail && <p className="mt-1 break-all text-xs font-medium text-slate-500">{content.updatedByEmail}</p>}
-            </div>
-            <div className="mt-3 grid gap-3">
-              <Detail label="Time" value={formatDate(content.updatedAt) || 'Waiting for first publish'} />
-              <Detail label="Last section" value={content.updatedSection || 'No section recorded'} />
-            </div>
-          </Panel>
-
-          <Panel title="Live Preview" icon={<Eye className="h-5 w-5" />}>
-            <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-              {selectedSection.imageUrl && selectedSection.layout !== 'banner' && (
-                <img src={selectedSection.imageUrl} alt="" className="h-40 w-full object-cover grayscale" />
-              )}
-              <div className="p-4">
-                <span className="inline-flex rounded-full bg-slate-950 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-white">{selectedSection.eyebrow || 'Event Update'}</span>
-                <h3 className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">{selectedSection.title}</h3>
-                <p className="mt-2 text-sm font-medium leading-relaxed text-slate-600">{selectedSection.body}</p>
-                {selectedSection.ctaLabel && <p className="mt-4 text-sm font-semibold text-slate-950">{selectedSection.ctaLabel} →</p>}
-              </div>
-            </article>
-          </Panel>
-        </div>
-      </div>
-    </>
   );
 }
 
@@ -1938,6 +1996,8 @@ function AttendanceAdminTab({
   onToggleVolunteerList,
   onToggleVolunteerActive,
   onToggleListActive,
+  onDeleteVolunteer,
+  onDeleteList,
 }: {
   teams: StoredRegistration[];
   volunteers: Volunteer[];
@@ -1952,6 +2012,8 @@ function AttendanceAdminTab({
   onToggleVolunteerList: (volunteer: Volunteer, listId: string) => void;
   onToggleVolunteerActive: (volunteer: Volunteer) => void;
   onToggleListActive: (list: AttendanceList) => void;
+  onDeleteVolunteer: (volunteer: Volunteer) => void;
+  onDeleteList: (list: AttendanceList) => void;
 }) {
   const activeLists = lists.filter(list => list.active);
   const marksByList = marks.reduce<Record<string, AttendanceMark[]>>((acc, mark) => {
@@ -1959,6 +2021,7 @@ function AttendanceAdminTab({
     return acc;
   }, {});
   const liveTeamIds = new Set(marks.map(mark => mark.teamId));
+  const sectionTypeLabel = (type?: AttendanceList['type']) => ATTENDANCE_SECTION_TYPES.find(item => item.value === (type || 'custom'))?.label || 'Custom';
 
   return (
     <div className="space-y-5">
@@ -1982,7 +2045,13 @@ function AttendanceAdminTab({
             </label>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
-                Color
+                Section type
+                <select className="admin-input" value={listForm.type || 'custom'} onChange={event => setListForm({ ...listForm, type: event.target.value as AttendanceList['type'] })}>
+                  {ATTENDANCE_SECTION_TYPES.map(type => <option key={type.value} value={type.value}>{type.label}</option>)}
+                </select>
+              </label>
+              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                Label color
                 <select className="admin-input" value={listForm.color || 'mint'} onChange={event => setListForm({ ...listForm, color: event.target.value as AttendanceList['color'] })}>
                   <option value="mint">Mint</option>
                   <option value="purple">Purple</option>
@@ -1990,6 +2059,8 @@ function AttendanceAdminTab({
                   <option value="white">White</option>
                 </select>
               </label>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
               <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
                 <input type="checkbox" checked={listForm.active} onChange={event => setListForm({ ...listForm, active: event.target.checked })} />
                 Open for marking
@@ -2029,7 +2100,8 @@ function AttendanceAdminTab({
                           : [...volunteerForm.allowedListIds, list.id],
                       })}
                     />
-                    {list.title}
+                    <span>{list.title}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] ${volunteerForm.allowedListIds.includes(list.id) ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-500'}`}>{sectionTypeLabel(list.type)}</span>
                   </label>
                 ))}
                 {lists.length === 0 && <p className="text-sm font-medium text-slate-500">Create a checkpoint first.</p>}
@@ -2042,9 +2114,9 @@ function AttendanceAdminTab({
         </Panel>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
+      <div className="grid gap-5">
         <Panel title="Volunteer Permissions" icon={<Users className="h-5 w-5" />}>
-          <div className="grid gap-3">
+          <div className="grid gap-3 xl:grid-cols-2">
             {volunteers.map(volunteer => (
               <div key={volunteer.id} className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2052,9 +2124,14 @@ function AttendanceAdminTab({
                     <p className="font-semibold text-slate-950">{volunteer.name || volunteer.email}</p>
                     <p className="mt-1 break-all font-mono text-xs font-medium text-slate-500">{volunteer.email}</p>
                   </div>
-                  <button type="button" onClick={() => onToggleVolunteerActive(volunteer)} className={`mini-btn ${volunteer.active ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
-                    {volunteer.active ? 'Active' : 'Disabled'}
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => onToggleVolunteerActive(volunteer)} className={`mini-btn ${volunteer.active ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                      {volunteer.active ? 'Active' : 'Disabled'}
+                    </button>
+                    <button type="button" onClick={() => onDeleteVolunteer(volunteer)} className="mini-btn bg-red-50 text-red-700">
+                      <Trash2 className="h-3.5 w-3.5" /> Delete
+                    </button>
+                  </div>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
                   {lists.map(list => {
@@ -2062,6 +2139,7 @@ function AttendanceAdminTab({
                     return (
                       <button key={list.id} type="button" onClick={() => onToggleVolunteerList(volunteer, list.id)} className={`mini-btn ${checked ? 'bg-slate-950 text-white' : 'bg-white'}`}>
                         {checked ? '✓ ' : ''}{list.title}
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] ${checked ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-500'}`}>{sectionTypeLabel(list.type)}</span>
                       </button>
                     );
                   })}
@@ -2073,25 +2151,43 @@ function AttendanceAdminTab({
         </Panel>
 
         <Panel title="Attendance Dashboard" icon={<BarChart3 className="h-5 w-5" />}>
-          <div className="grid gap-3">
+          <div className="overflow-x-auto pb-2">
+            <div className="grid min-w-[820px] grid-flow-col auto-cols-[minmax(300px,1fr)] gap-3">
             {lists.map(list => {
               const listMarks = marksByList[list.id] || [];
               return (
-                <div key={list.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div key={list.id} className="flex max-h-[560px] min-w-0 flex-col rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
+                    <div className="min-w-0">
                       <p className="font-semibold text-slate-950">{list.title}</p>
-                      <p className="mt-1 text-xs font-medium text-slate-500">{list.description || 'No note'} • {listMarks.length}/{teams.length} teams marked</p>
+                      <p className="mt-1 text-xs font-medium text-slate-500">{sectionTypeLabel(list.type)} • {listMarks.length}/{teams.length} teams marked</p>
+                      {list.description && <p className="mt-1 line-clamp-2 text-xs font-medium text-slate-400">{list.description}</p>}
                     </div>
-                    <button type="button" onClick={() => onToggleListActive(list)} className={`mini-btn ${list.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
-                      {list.active ? 'Open' : 'Closed'}
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" onClick={() => onToggleListActive(list)} className={`mini-btn ${list.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`} title={list.active ? 'Close this section' : 'Open this section'}>
+                        {list.active ? 'Open' : 'Closed'}
+                      </button>
+                      <button type="button" onClick={() => onDeleteList(list)} className="mini-btn bg-red-50 text-red-700">
+                        <Trash2 className="h-3.5 w-3.5" /> Delete
+                      </button>
+                    </div>
                   </div>
-                  <div className="mt-3 max-h-40 overflow-y-auto rounded-xl bg-slate-50 p-2">
-                    {listMarks.slice(0, 12).map(mark => (
-                      <div key={mark.id} className="flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-xs font-semibold text-slate-700">
-                        <span className="truncate">{mark.teamName}</span>
-                        <span className="flex-none text-slate-400">{formatDate(mark.createdAt) || 'marked'}</span>
+                  <div className="mt-3 min-h-0 flex-1 overflow-y-auto rounded-xl bg-slate-50 p-2">
+                    {listMarks.map(mark => (
+                      <div key={mark.id} className="mb-2 rounded-xl bg-white p-3 text-xs shadow-sm ring-1 ring-slate-200/70 last:mb-0">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate font-semibold text-slate-950">{mark.teamName}</p>
+                            <p className="mt-1 truncate font-mono text-[10px] font-semibold uppercase tracking-wide text-slate-400">{mark.registrationId || mark.teamId}</p>
+                          </div>
+                          <span className="flex-none rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-500">{mark.teamSize || Math.max((mark.members || []).length + 1, 1)} members</span>
+                        </div>
+                        <div className="mt-2 grid gap-1 text-slate-500">
+                          <p className="truncate"><span className="font-semibold text-slate-700">Leader:</span> {mark.leaderName || 'Not set'}</p>
+                          <p className="truncate"><span className="font-semibold text-slate-700">College:</span> {mark.collegeName || 'Not set'}</p>
+                          <p className="truncate"><span className="font-semibold text-slate-700">Marked by:</span> {mark.markedByName || mark.markedByEmail || 'Volunteer'}</p>
+                          <p><span className="font-semibold text-slate-700">Time:</span> {formatDate(mark.createdAt) || 'marked'}</p>
+                        </div>
                       </div>
                     ))}
                     {listMarks.length === 0 && <p className="p-2 text-sm font-medium text-slate-500">No teams marked yet.</p>}
@@ -2099,6 +2195,7 @@ function AttendanceAdminTab({
                 </div>
               );
             })}
+            </div>
             {lists.length === 0 && <EmptyState text="Create attendance lists like Food, Entry, GMC, or Session 1." />}
           </div>
         </Panel>
@@ -2136,8 +2233,14 @@ function TeamsTab(props: {
 }) {
   const { teams, selectedTeam, selectedSubmission } = props;
   return (
-    <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-      <Panel title="Team Management" icon={<Users className="h-5 w-5" />}>
+    <div className="space-y-5">
+      <TeamStatusBarChart
+        teams={teams}
+        submissionByTeamId={props.submissionByTeamId}
+        reviewStatusForTeam={props.reviewStatusForTeam}
+      />
+      <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+        <Panel title="Team Management" icon={<Users className="h-5 w-5" />}>
         <FilterBar {...props} />
         <div className="mt-5 overflow-x-auto">
           <table className="w-full min-w-[980px] text-left">
@@ -2148,11 +2251,23 @@ function TeamsTab(props: {
               {teams.map(team => {
                 const submission = props.submissionByTeamId[team.userId] || props.submissionByTeamId[team.id];
                 const status = props.reviewStatusForTeam(team);
+                const isSelected = selectedTeam?.id === team.id;
+                const selectTeam = () => props.setSelectedTeamId(team.id);
                 return (
-                  <tr key={team.id} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="px-4 py-3 text-sm font-semibold">
-                      <button type="button" onClick={() => props.setSelectedTeamId(team.id)} className="hover:underline">{team.teamName}</button>
-                    </td>
+                  <tr
+                    key={team.id}
+                    tabIndex={0}
+                    aria-selected={isSelected}
+                    onClick={selectTeam}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        selectTeam();
+                      }
+                    }}
+                    className={`cursor-pointer border-b border-slate-100 outline-none transition focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-950 ${isSelected ? 'bg-violet-50' : 'hover:bg-slate-50'}`}
+                  >
+                    <td className="px-4 py-3 text-sm font-semibold">{team.teamName}</td>
                     <td className="px-4 py-3 text-xs font-medium text-slate-700">{team.leaderName}<br /><span className="font-mono text-slate-400">{team.leaderEmail}</span></td>
                     <td className="px-4 py-3 text-sm font-medium text-slate-700">{team.location || '-'}</td>
                     <td className="px-4 py-3 text-sm font-medium text-slate-700">{team.collegeName || '-'}</td>
@@ -2160,9 +2275,9 @@ function TeamsTab(props: {
                     <td className="px-4 py-3"><StatusBadge label={status} tone={status === 'approved' ? 'green' : status === 'rejected' ? 'red' : 'neutral'} /></td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">
-                        <button type="button" onClick={() => props.onApprove(team)} className="mini-btn bg-slate-950 text-white">Approve</button>
-                        <button type="button" onClick={() => props.onReject(team)} className="mini-btn bg-white">Reject</button>
-                        <button type="button" onClick={() => props.onDelete(team)} className="mini-btn bg-red-50 text-red-700"><Trash2 className="h-3 w-3" /></button>
+                        <button type="button" onClick={event => { event.stopPropagation(); props.onApprove(team); }} className="mini-btn bg-slate-950 text-white">Approve</button>
+                        <button type="button" onClick={event => { event.stopPropagation(); props.onReject(team); }} className="mini-btn bg-white">Reject</button>
+                        <button type="button" onClick={event => { event.stopPropagation(); props.onDelete(team); }} className="mini-btn bg-red-50 text-red-700" aria-label={`Delete ${team.teamName}`}><Trash2 className="h-3 w-3" /></button>
                       </div>
                     </td>
                   </tr>
@@ -2172,11 +2287,11 @@ function TeamsTab(props: {
           </table>
           {teams.length === 0 && <EmptyState text="No teams match the selected filters." />}
         </div>
-      </Panel>
+        </Panel>
 
-      <Panel title="Team Detail" icon={<FileText className="h-5 w-5" />}>
-        {selectedTeam ? (
-          <div className="space-y-4">
+        <Panel title="Team Detail" icon={<FileText className="h-5 w-5" />}>
+          {selectedTeam ? (
+            <div className="space-y-4">
             <Detail label="Team" value={selectedTeam.teamName} />
             <Detail label="Leader" value={`${selectedTeam.leaderName} • ${selectedTeam.leaderEmail}`} />
             <Detail label="College" value={`${selectedTeam.collegeName || '-'} • ${selectedTeam.fieldOfStudy || '-'}`} />
@@ -2200,10 +2315,63 @@ function TeamsTab(props: {
               </div>
             </div>
             {selectedSubmission && <SubmissionPreview submission={selectedSubmission} />}
-          </div>
-        ) : <EmptyState text="Select a team to view details." />}
-      </Panel>
+            </div>
+          ) : <EmptyState text="Select a team to view details." />}
+        </Panel>
+      </div>
     </div>
+  );
+}
+
+function TeamStatusBarChart({
+  teams,
+  submissionByTeamId,
+  reviewStatusForTeam,
+}: {
+  teams: StoredRegistration[];
+  submissionByTeamId: Record<string, IdeaSubmission>;
+  reviewStatusForTeam: (team: StoredRegistration) => ReviewStatus;
+}) {
+  const bars = [
+    { label: 'Total', value: teams.length, color: '#0f172a' },
+    {
+      label: 'Submitted',
+      value: teams.filter(team => (submissionByTeamId[team.userId] || submissionByTeamId[team.id])?.status === 'submitted').length,
+      color: '#10b981',
+    },
+    { label: 'Approved', value: teams.filter(team => reviewStatusForTeam(team) === 'approved').length, color: '#22c55e' },
+    { label: 'Under review', value: teams.filter(team => reviewStatusForTeam(team) === 'under-review').length, color: '#8b5cf6' },
+    { label: 'Rejected', value: teams.filter(team => reviewStatusForTeam(team) === 'rejected').length, color: '#ef4444' },
+  ];
+  const max = Math.max(...bars.map(bar => bar.value), 1);
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Filtered team pipeline</p>
+          <h2 className="mt-1 text-xl font-semibold tracking-tight text-slate-950">Team Status Bar Chart</h2>
+        </div>
+        <span className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600">{teams.length} matching teams</span>
+      </div>
+      <div className="mt-5 grid h-52 grid-cols-5 items-end gap-3 rounded-2xl bg-slate-50 px-4 pb-4 pt-8 sm:gap-5 sm:px-7">
+        {bars.map(bar => {
+          const height = bar.value ? Math.max((bar.value / max) * 100, 8) : 2;
+          return (
+            <div key={bar.label} className="flex h-full min-w-0 flex-col justify-end text-center">
+              <span className="mb-2 text-sm font-black text-slate-950">{bar.value}</span>
+              <div
+                className="mx-auto w-full max-w-16 rounded-t-xl transition-[height] duration-300"
+                style={{ height: `${height}%`, backgroundColor: bar.color }}
+                role="img"
+                aria-label={`${bar.label}: ${bar.value} teams`}
+              />
+              <span className="mt-2 truncate text-[10px] font-bold uppercase tracking-wide text-slate-500" title={bar.label}>{bar.label}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -2268,6 +2436,7 @@ function JudgesTab({ judges, assignments, teams, judgeForm, setJudgeForm, onSubm
 function AssignmentsTab(props: {
   judges: Judge[];
   teams: StoredRegistration[];
+  totalTeams: number;
   assignments: Assignment[];
   assignmentJudgeId: string;
   setAssignmentJudgeId: (value: string) => void;
@@ -2306,14 +2475,17 @@ function AssignmentsTab(props: {
           <p className="mt-1 text-sm font-semibold text-slate-800">{selectedJudge ? `${selectedJudge.name} • ${selectedJudge.email}` : 'No judge selected'}</p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Selected Teams</p>
-          <p className="mt-1 text-sm font-semibold text-slate-800">{props.selectedAssignmentTeams.length}</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Submitted Ideas</p>
+          <p className="mt-1 text-sm font-semibold text-slate-800">{props.teams.length}/{props.totalTeams} assignable</p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Round</p>
           <p className="mt-1 text-sm font-semibold text-slate-800">{props.assignmentRound}</p>
         </div>
       </div>
+      <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+        Only submitted, non-rejected teams currently active in {props.assignmentRound} appear here. Existing assignments to the selected judge are locked.
+      </p>
       <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {props.teams.map(team => {
           const checked = props.selectedAssignmentTeams.includes(team.id);
@@ -2321,13 +2493,14 @@ function AssignmentsTab(props: {
             ? props.assignments.some(assignment => assignment.judgeId === props.assignmentJudgeId && assignment.teamId === team.id && assignment.round === props.assignmentRound)
             : false;
           return (
-            <label key={team.id} className={`rounded-xl border p-3 text-sm font-semibold transition ${checked ? 'border-slate-950 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
-              <input type="checkbox" className="mr-2 accent-slate-950" checked={checked} onChange={() => props.setSelectedAssignmentTeams(checked ? props.selectedAssignmentTeams.filter(id => id !== team.id) : [...props.selectedAssignmentTeams, team.id])} />
+            <label key={team.id} className={`rounded-xl border p-3 text-sm font-semibold transition ${alreadyAssigned ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400' : checked ? 'border-slate-950 bg-slate-950 text-white' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
+              <input type="checkbox" className="mr-2 accent-slate-950" checked={checked || alreadyAssigned} disabled={alreadyAssigned} onChange={() => props.setSelectedAssignmentTeams(checked ? props.selectedAssignmentTeams.filter(id => id !== team.id) : [...props.selectedAssignmentTeams, team.id])} />
               {team.teamName}
               {alreadyAssigned && <span className={`ml-2 text-xs ${checked ? 'text-slate-300' : 'text-slate-400'}`}>assigned</span>}
             </label>
           );
         })}
+        {props.teams.length === 0 && <p className="rounded-xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">No eligible teams are active in {props.assignmentRound}.</p>}
       </div>
       <div className="mt-5 grid gap-3 md:grid-cols-3">
         {props.judges.map(judge => {
@@ -2362,7 +2535,7 @@ function ReviewsTab({
         <form onSubmit={onScoreSubmit} className="grid gap-4">
           <select className="admin-input" value={scoreForm.teamId} onChange={event => setScoreForm({ ...scoreForm, teamId: event.target.value })} required>
             <option value="">Select team</option>
-            {teams.map(team => <option key={team.id} value={team.id}>{team.teamName}</option>)}
+            {teams.filter(team => team.reviewStatus !== 'rejected').map(team => <option key={team.id} value={team.id}>{team.teamName} • {roundForTeam(team)}</option>)}
           </select>
           <select className="admin-input" value={scoreForm.judgeId} onChange={event => setScoreForm({ ...scoreForm, judgeId: event.target.value })} required>
             <option value="">Select judge</option>
@@ -2442,19 +2615,76 @@ function LeaderboardTab({ leaderboard, onExport }: { leaderboard: Array<{ regist
   );
 }
 
-function RoundsTab({ teams, onMove, onReject }: { teams: StoredRegistration[]; onMove: (team: StoredRegistration, round: RoundName) => void; onReject: (team: StoredRegistration) => void }) {
+function RoundsTab({ teams, reviewStatusForTeam, onApprove, onMove, onReject }: {
+  teams: StoredRegistration[];
+  reviewStatusForTeam: (team: StoredRegistration) => ReviewStatus;
+  onApprove: (team: StoredRegistration) => void;
+  onMove: (team: StoredRegistration, round: RoundName) => void;
+  onReject: (team: StoredRegistration) => void;
+}) {
+  const rejectedTeams = teams.filter(team => reviewStatusForTeam(team) === 'rejected');
+  const activeTeams = teams.filter(team => reviewStatusForTeam(team) !== 'rejected');
+
   return (
-    <Panel title="Multi-Round Evaluation" icon={<Medal className="h-5 w-5" />}>
-      <div className="grid gap-4 lg:grid-cols-3">
-        {(['Round 1', 'Round 2', 'Round 3'] as RoundName[]).map(round => (
-          <div key={round} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <h3 className="font-semibold text-slate-950">{round}</h3>
-            <p className="mt-1 text-xs font-medium text-slate-500">{round === 'Round 1' ? 'Initial Screening' : round === 'Round 2' ? 'Technical Evaluation' : 'Final Presentation'}</p>
-            <div className="mt-4 space-y-2">{teams.slice(0, 8).map(team => <div key={`${round}-${team.id}`} className="rounded-xl bg-slate-50 p-3 text-xs font-medium text-slate-700"><p>{team.teamName}</p><div className="mt-2 flex gap-2"><button type="button" onClick={() => onMove(team, round)} className="mini-btn bg-slate-950 text-white">Move</button><button type="button" onClick={() => onReject(team)} className="mini-btn bg-white">Reject</button></div></div>)}</div>
-          </div>
-        ))}
-      </div>
-    </Panel>
+    <div className="space-y-5">
+      <Panel title="Multi-Round Evaluation" icon={<Medal className="h-5 w-5" />}>
+        <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
+          Teams advance sequentially only after approval. Rejection is final: rejected teams are removed from pending judge assignments and cannot enter a later round.
+        </div>
+        <div className="grid gap-4 lg:grid-cols-3">
+          {ROUND_NAMES.map(round => {
+            const roundTeams = activeTeams.filter(team => roundForTeam(team) === round);
+            return (
+              <div key={round} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="font-semibold text-slate-950">{round}</h3>
+                    <p className="mt-1 text-xs font-medium text-slate-500">{round === 'Round 1' ? 'Initial Screening' : round === 'Round 2' ? 'Technical Evaluation' : 'Final Presentation'}</p>
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">{roundTeams.length}</span>
+                </div>
+                <div className="mt-4 space-y-2">
+                  {roundTeams.map(team => {
+                    const status = reviewStatusForTeam(team);
+                    const nextRound = nextRoundForTeam(team);
+                    return (
+                      <div key={team.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-medium text-slate-700">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="font-semibold text-slate-900">{team.teamName}</p>
+                          <StatusBadge label={status} tone={status === 'approved' ? 'green' : 'neutral'} />
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {status !== 'approved' && <button type="button" onClick={() => onApprove(team)} className="mini-btn bg-emerald-50 text-emerald-700">Approve round</button>}
+                          {nextRound ? (
+                            <button type="button" disabled={status !== 'approved'} onClick={() => onMove(team, nextRound)} className="mini-btn bg-slate-950 text-white disabled:cursor-not-allowed disabled:opacity-40">
+                              {status === 'approved' ? `Advance to ${nextRound}` : 'Approve first'}
+                            </button>
+                          ) : <span className="rounded-lg bg-emerald-50 px-2 py-1 text-[10px] font-bold uppercase text-emerald-700">Final round</span>}
+                          <button type="button" onClick={() => onReject(team)} className="mini-btn bg-red-50 text-red-700">Reject</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {roundTeams.length === 0 && <EmptyState text={`No active teams in ${round}.`} />}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
+
+      <Panel title="Rejected Teams" icon={<UserMinus className="h-5 w-5" />}>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {rejectedTeams.map(team => (
+            <div key={team.id} className="rounded-xl border border-red-200 bg-red-50 p-4">
+              <p className="font-semibold text-red-900">{team.teamName}</p>
+              <p className="mt-1 text-xs font-medium text-red-700">Rejected in {roundForTeam(team)} • not eligible for assignment or advancement</p>
+            </div>
+          ))}
+          {rejectedTeams.length === 0 && <EmptyState text="No rejected teams." />}
+        </div>
+      </Panel>
+    </div>
   );
 }
 
@@ -2698,6 +2928,74 @@ function AnalyticsCard({ title, data }: { title: string; data: Record<string, nu
   const entries = Object.entries(data).sort((a, b) => b[1] - a[1]).slice(0, 6);
   const max = Math.max(...entries.map(([, value]) => value), 1);
   return <Panel title={title} icon={<BarChart3 className="h-5 w-5" />}><div className="space-y-3">{entries.map(([label, value]) => <div key={label}><div className="mb-1 flex justify-between gap-3 text-xs font-semibold text-slate-600"><span className="truncate">{label}</span><span>{value}</span></div><div className="h-2 rounded-full bg-slate-100"><div className="h-full rounded-full bg-slate-950" style={{ width: `${Math.max((value / max) * 100, 8)}%` }} /></div></div>)}{entries.length === 0 && <EmptyState text="No data yet." />}</div></Panel>;
+}
+
+function TrendChartCard({ title, data }: { title: string; data: Array<{ label: string; value: number }> }) {
+  const width = 640;
+  const height = 230;
+  const paddingX = 34;
+  const paddingTop = 20;
+  const paddingBottom = 42;
+  const graphHeight = height - paddingTop - paddingBottom;
+  const max = Math.max(...data.map(item => item.value), 1);
+  const points = data.map((item, index) => ({
+    ...item,
+    x: paddingX + (index / Math.max(data.length - 1, 1)) * (width - paddingX * 2),
+    y: paddingTop + graphHeight - (item.value / max) * graphHeight,
+  }));
+  const line = points.map(point => `${point.x},${point.y}`).join(' ');
+  const area = points.length
+    ? `M ${points[0].x} ${paddingTop + graphHeight} L ${points.map(point => `${point.x} ${point.y}`).join(' L ')} L ${points[points.length - 1].x} ${paddingTop + graphHeight} Z`
+    : '';
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  const peak = Math.max(...data.map(item => item.value), 0);
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Growth graph</p><h2 className="mt-1 text-xl font-semibold tracking-tight">{title}</h2></div>
+        <div className="flex gap-2"><span className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{total} new</span><span className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600">Peak {peak}/day</span></div>
+      </div>
+      <div className="mt-4 overflow-hidden rounded-xl bg-slate-50 p-2">
+        <svg viewBox={`0 0 ${width} ${height}`} className="h-64 w-full" preserveAspectRatio="none" role="img" aria-label={`${title}: ${total} total registrations`}>
+          <defs>
+            <linearGradient id="registration-area" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#10b981" stopOpacity="0.38" /><stop offset="100%" stopColor="#10b981" stopOpacity="0.02" /></linearGradient>
+          </defs>
+          {[0, 0.25, 0.5, 0.75, 1].map(value => <line key={value} x1={paddingX} x2={width - paddingX} y1={paddingTop + graphHeight * value} y2={paddingTop + graphHeight * value} stroke="#dbe3ea" strokeWidth="1" strokeDasharray="4 5" />)}
+          {area && <path d={area} fill="url(#registration-area)" />}
+          <polyline points={line} fill="none" stroke="#059669" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+          {points.map((point, index) => <g key={`${point.label}-${index}`}><circle cx={point.x} cy={point.y} r="5" fill="#fff" stroke="#059669" strokeWidth="3" vectorEffect="non-scaling-stroke"><title>{point.label}: {point.value}</title></circle>{(index === 0 || index === points.length - 1 || index % 4 === 0) && <text x={point.x} y={height - 12} textAnchor={index === 0 ? 'start' : index === points.length - 1 ? 'end' : 'middle'} fill="#64748b" fontSize="12" fontWeight="600">{point.label}</text>}</g>)}
+        </svg>
+      </div>
+    </section>
+  );
+}
+
+function DonutChartCard({ title, data, colors }: { title: string; data: Record<string, number>; colors: string[] }) {
+  const entries = Object.entries(data);
+  const total = entries.reduce((sum, [, value]) => sum + value, 0);
+  let cursor = 0;
+  const segments = entries.map(([label, value], index) => {
+    const start = cursor;
+    const size = total ? (value / total) * 100 : 0;
+    cursor += size;
+    return { label, value, color: colors[index % colors.length], start, end: cursor };
+  });
+  const background = total
+    ? `conic-gradient(${segments.map(segment => `${segment.color} ${segment.start}% ${segment.end}%`).join(', ')})`
+    : '#e2e8f0';
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center gap-3"><span className="rounded-xl bg-slate-100 p-2 text-slate-700"><BarChart3 className="h-5 w-5" /></span><h2 className="text-xl font-semibold tracking-tight">{title}</h2></div>
+      <div className="mt-6 flex flex-col items-center gap-6 sm:flex-row xl:flex-col 2xl:flex-row">
+        <div className="relative h-40 w-40 flex-none rounded-full" style={{ background }} role="img" aria-label={`${title}, ${total} total`}>
+          <div className="absolute inset-8 grid place-items-center rounded-full bg-white shadow-inner"><span className="text-center"><span className="block text-3xl font-black text-slate-950">{total}</span><span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total</span></span></div>
+        </div>
+        <div className="w-full min-w-0 space-y-2.5">{segments.map(segment => <div key={segment.label} className="flex items-center justify-between gap-3 text-xs"><span className="flex min-w-0 items-center gap-2 font-semibold text-slate-600"><span className="h-2.5 w-2.5 flex-none rounded-full" style={{ backgroundColor: segment.color }} /><span className="truncate">{segment.label}</span></span><span className="font-black text-slate-950">{segment.value}<span className="ml-1 font-semibold text-slate-400">{total ? `${Math.round((segment.value / total) * 100)}%` : '0%'}</span></span></div>)}</div>
+      </div>
+    </section>
+  );
 }
 
 function SubmissionPreview({ submission }: { submission: IdeaSubmission }) {

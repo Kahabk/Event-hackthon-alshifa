@@ -95,7 +95,7 @@ export default function Mentors() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4 items-stretch">
           {MENTORS.map((mentor, index) => {
             const active = activeMentorIndex === index;
             return (
@@ -105,7 +105,7 @@ export default function Mentors() {
                 onFocus={() => setActiveMentorIndex(index)}
                 onMouseEnter={() => setActiveMentorIndex(index)}
                 onClick={() => setActiveMentorIndex(index)}
-                className={`group flex min-h-[28rem] cursor-pointer flex-col rounded-[30px] border-2 border-[#191A23] p-5 text-left shadow-[0_8px_0_#191A23] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_12px_0_#191A23] focus:outline-none focus:ring-4 focus:ring-[#cdb0e7]/60 ${
+                className={`group h-full cursor-pointer flex flex-col rounded-[30px] border-2 border-[#191A23] p-5 text-left shadow-[0_8px_0_#191A23] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_12px_0_#191A23] focus:outline-none focus:ring-4 focus:ring-[#cdb0e7]/60 ${
                   active ? 'bg-[#cdb0e7]' : 'bg-[#fffdf8]'
                 }`}
               >

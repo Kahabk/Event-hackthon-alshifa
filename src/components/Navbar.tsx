@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ClipboardCheck, Gavel, LayoutDashboard, LogIn, Menu, ShieldCheck, X } from 'lucide-react';
 import AppleStyleAvatar from './AppleStyleAvatar';
+import type { LandingButtonConfig, LandingHeaderConfig } from '../lib/landingContent';
 
 interface NavbarProps {
   onRegisterClick: () => void;
@@ -18,9 +19,11 @@ interface NavbarProps {
   userPhotoURL?: string | null;
   onAuthClick: () => void;
   onProfileClick: () => void;
+  content?: LandingHeaderConfig;
+  onButtonAction?: (config: LandingButtonConfig, sourceSection: string) => void;
 }
 
-export default function Navbar({ onRegisterClick, onAdminClick, onJudgeClick, onVolunteerClick, onDashboardClick, onHomeClick, isLoggedIn, isAdmin, isJudge, isVolunteer, userEmail, userDisplayName, userPhotoURL, onAuthClick, onProfileClick }: NavbarProps) {
+export default function Navbar({ onRegisterClick, onAdminClick, onJudgeClick, onVolunteerClick, onDashboardClick, onHomeClick, isLoggedIn, isAdmin, isJudge, isVolunteer, userEmail, userDisplayName, userPhotoURL, onAuthClick, onProfileClick, content, onButtonAction }: NavbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -58,6 +61,17 @@ export default function Navbar({ onRegisterClick, onAdminClick, onJudgeClick, on
     }
     onDashboardClick();
   };
+  const handleRegisterNavClick = () => {
+    if (content?.buttonConfig) {
+      onButtonAction?.(content.buttonConfig, 'header');
+      if (onButtonAction) return;
+    }
+    if (!content?.buttonUrl || content.buttonUrl === '/register') {
+      onRegisterClick();
+      return;
+    }
+    window.location.href = content.buttonUrl;
+  };
 
   const navItems = volunteerOnly
     ? [{ label: 'Volunteer', onClick: onVolunteerClick, icon: workspaceIcon, active: true }]
@@ -67,14 +81,16 @@ export default function Navbar({ onRegisterClick, onAdminClick, onJudgeClick, on
         onClick: handleWorkspaceClick,
         icon: workspaceIcon,
       },
-      { label: 'Domains', href: '#tracks' },
-      { label: 'Stages', href: '#schedule' },
-      { label: 'Prizes', href: '#prizes' },
-      { label: 'Mentors', href: '#mentors' },
-      { label: 'FAQ', href: '#faq' },
-      ...(isAdmin ? [{ label: 'Control Room', onClick: onAdminClick }] : []),
+      ...(content?.navLinks?.length ? content.navLinks.map(item => ({ label: item.label, href: item.url })) : [
+        { label: 'Domains', href: '#tracks' },
+        { label: 'Stages', href: '#schedule' },
+        { label: 'Prizes', href: '#prizes' },
+        { label: 'Mentors', href: '#mentors' },
+        { label: 'FAQ', href: '#faq' },
+      ]),
+      ...(isAdmin && content?.showAdminButton !== false ? [{ label: 'Control Room', onClick: onAdminClick }] : []),
       ...(isVolunteer || isAdmin ? [{ label: 'Volunteer', onClick: onVolunteerClick }] : []),
-      ...(!isJudge && !isVolunteer ? [{ label: 'Register', onClick: onRegisterClick, active: true }] : []),
+      ...(!isJudge && !isVolunteer && content?.showRegisterButton !== false && content?.buttonConfig?.visible !== false ? [{ label: content?.buttonText || 'Register', onClick: handleRegisterNavClick, active: true, buttonStyle: content?.buttonConfig?.style || 'primary' }] : []),
     ];
 
   return (
@@ -93,7 +109,7 @@ export default function Navbar({ onRegisterClick, onAdminClick, onJudgeClick, on
             SDG
           </span>
           <span className="hidden xl:inline font-sans font-black text-xl tracking-tight text-[#191A23] select-none">
-            Shifa SDG
+            {content?.logoText || 'Shifa SDG'}
           </span>
         </a>
 
@@ -124,7 +140,7 @@ export default function Navbar({ onRegisterClick, onAdminClick, onJudgeClick, on
                   key={item.label}
                   type="button"
                   onClick={item.onClick}
-                  className={`theme-header-link ${'active' in item && item.active ? 'theme-header-link-active' : ''}`}
+                  className={`theme-header-link ${'active' in item && item.active ? 'theme-header-link-active' : ''} ${'buttonStyle' in item && item.buttonStyle === 'dark' ? '!bg-[#191A23] !text-white' : ''} ${'buttonStyle' in item && item.buttonStyle === 'outline' ? '!bg-transparent' : ''}`}
                 >
                   {content}
                 </button>
@@ -142,13 +158,13 @@ export default function Navbar({ onRegisterClick, onAdminClick, onJudgeClick, on
             {isLoggedIn ? workspaceIcon : <LogIn className="h-4 w-4" />}
             <span>{isLoggedIn ? workspaceLabel : 'Login'}</span>
           </button>
-          {!isJudge && !isVolunteer && (
+          {!isJudge && !isVolunteer && content?.showRegisterButton !== false && content?.buttonConfig?.visible !== false && (
             <button
               type="button"
-              onClick={onRegisterClick}
-              className="theme-compact-header-action theme-compact-header-action-primary xl:hidden"
+              onClick={handleRegisterNavClick}
+              className={`theme-compact-header-action xl:hidden ${content?.buttonConfig?.style === 'dark' ? '!bg-[#191A23] !text-white' : content?.buttonConfig?.style === 'outline' ? 'border-2 border-[#191A23] bg-transparent' : 'theme-compact-header-action-primary'}`}
             >
-              Register
+              {content?.buttonText || 'Register'}
             </button>
           )}
           {isLoggedIn ? (
@@ -226,7 +242,7 @@ export default function Navbar({ onRegisterClick, onAdminClick, onJudgeClick, on
                     setMobileMenuOpen(false);
                     item.onClick();
                   }}
-                  className={`theme-mobile-link text-left ${'active' in item && item.active ? 'theme-mobile-link-active' : ''}`}
+                  className={`theme-mobile-link text-left ${'active' in item && item.active ? 'theme-mobile-link-active' : ''} ${'buttonStyle' in item && item.buttonStyle === 'dark' ? '!bg-[#191A23] !text-white' : ''} ${'buttonStyle' in item && item.buttonStyle === 'outline' ? '!bg-transparent border-2 border-[#191A23]' : ''}`}
                 >
                   {item.label}
                 </button>

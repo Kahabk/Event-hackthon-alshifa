@@ -63,7 +63,10 @@ export interface TeamMember {
 }
 
 export interface Registration {
+  teamId?: string;
   registrationId?: string;
+  ticketId?: string;
+  ticketVersion?: number;
   teamName: string;
   teamNameKey?: string;
   leaderName: string;
@@ -149,6 +152,7 @@ export interface AttendanceList {
   title: string;
   description?: string;
   active: boolean;
+  type?: 'workshop' | 'entry' | 'food' | 'certificate' | 'gmc' | 'custom';
   color?: 'mint' | 'purple' | 'yellow' | 'white';
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -156,12 +160,17 @@ export interface AttendanceList {
 
 export interface AttendanceMark {
   id: string;
+  eventId?: string;
   listId: string;
   listTitle: string;
+  sectionId?: string;
+  sectionName?: string;
   teamId: string;
   registrationId?: string;
   teamName: string;
   leaderName: string;
+  leaderEmail?: string;
+  phoneNumber?: string;
   collegeName?: string;
   location?: string;
   teamSize?: number;
@@ -169,6 +178,11 @@ export interface AttendanceMark {
   markedByUid: string;
   markedByEmail: string;
   markedByName?: string;
+  qrPayload?: string;
+  scanSource?: 'camera' | 'upload' | 'manual';
+  ticketId?: string;
+  ticketVersion?: number;
+  ticketVerification?: 'verified-ticket' | 'legacy-qr' | 'manual-lookup';
   createdAt?: unknown;
   updatedAt?: unknown;
 }

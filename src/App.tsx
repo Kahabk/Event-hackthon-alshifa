@@ -3,29 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowRight, Bell, CheckCircle2, Ticket, X } from 'lucide-react';
 import { User as FirebaseUser, onAuthStateChanged } from 'firebase/auth';
-import { collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, orderBy, query, runTransaction, serverTimestamp, setDoc } from 'firebase/firestore';
 
 import Navbar from './components/Navbar';
 import Hero from './components/Hero';
-import Sponsors from './components/Sponsors';
-import Highlights from './components/Highlights';
-import Tracks from './components/Tracks';
-import Schedule from './components/Schedule';
-import Prizes from './components/Prizes';
-import ProductVideos from './components/ProductVideos';
-import ImageQuotes from './components/ImageQuotes';
-import Mentors from './components/Mentors';
-import Testimonials from './components/Testimonials';
-import FAQ from './components/FAQ';
-import CTA from './components/CTA';
 import Footer from './components/Footer';
 import AuthModal from './components/AuthModal';
 import ProfilePanel from './components/ProfilePanel';
 import AdminPanel from './components/AdminPanel';
+import AdminLandingEditorPage from './components/AdminLandingEditorPage';
 import RegistrationPage from './components/RegistrationPage';
 import BadgePreviewPage from './components/BadgePreviewPage';
 import TeamDashboard from './components/TeamDashboard';
@@ -34,13 +24,17 @@ import VolunteerPanel from './components/VolunteerPanel';
 import FullScreenVideoLoader from './components/FullScreenVideoLoader';
 import PasswordResetPage from './components/PasswordResetPage';
 import DynamicLandingSections from './components/DynamicLandingSections';
+import DynamicFormModal from './components/DynamicFormModal';
 import { Registration } from './types';
 import { adminEmail, auth, db } from './lib/firebase';
 import { LOADER_CYCLE_MS } from './loaderConfig';
 import { defaultLandingContent, LandingEditorContent, landingContentCollection, landingContentDocId, normalizeLandingContent } from './lib/landingContent';
+import type { LandingButtonConfig } from './lib/landingContent';
+import { formsCollection, normalizeRegistrationForm, RegistrationForm } from './lib/forms';
 import { getAvatarById, getAvatarByUrl, getFallbackAvatar } from './lib/profileAvatars';
+import { createTicketId, EVENT_TICKET_VERSION } from './lib/eventTicket';
 
-type Page = 'home' | 'register' | 'admin' | 'badge' | 'dashboard' | 'judge' | 'volunteer' | 'profile' | 'reset-password';
+type Page = 'home' | 'register' | 'admin' | 'landingediter' | 'badge' | 'dashboard' | 'judge' | 'volunteer' | 'profile' | 'reset-password';
 
 interface WebAnnouncement {
   id: string;
@@ -58,6 +52,7 @@ const pageFromPath = (): Page => {
   if (window.location.pathname === '/reset-password' || (params.get('mode') === 'resetPassword' && params.get('oobCode'))) return 'reset-password';
   if (window.location.pathname === '/register') return 'register';
   if (window.location.pathname === '/admin') return 'admin';
+  if (window.location.pathname === '/landingediter' || window.location.pathname === '/landingeditor') return 'landingediter';
   if (window.location.pathname === '/badge') return 'badge';
   if (window.location.pathname === '/dashboard') return 'dashboard';
   if (window.location.pathname === '/judge') return 'judge';
@@ -69,6 +64,7 @@ const pageFromPath = (): Page => {
 const pathForPage = (page: Page) => {
   if (page === 'register') return '/register';
   if (page === 'admin') return '/admin';
+  if (page === 'landingediter') return '/landingediter';
   if (page === 'badge') return '/badge';
   if (page === 'dashboard') return '/dashboard';
   if (page === 'judge') return '/judge';
@@ -124,10 +120,47 @@ export default function App() {
   const [webAnnouncements, setWebAnnouncements] = useState<WebAnnouncement[]>([]);
   const [hiddenAnnouncementIds, setHiddenAnnouncementIds] = useState<string[]>([]);
   const [landingContent, setLandingContent] = useState<LandingEditorContent>(defaultLandingContent);
+  const [activeForms, setActiveForms] = useState<RegistrationForm[]>([]);
+  const [openDynamicForm, setOpenDynamicForm] = useState<RegistrationForm | null>(null);
+  const [dynamicFormSource, setDynamicFormSource] = useState({ section: '', button: '' });
+  const [formActionError, setFormActionError] = useState('');
 
   const isAdmin = Boolean(
     currentUser?.email && adminEmail && currentUser.email.toLowerCase() === adminEmail
   ) || isFirestoreAdmin;
+
+  useEffect(() => {
+    if (page !== 'home') return;
+    let cancelled = false;
+    void getDocs(collection(db, formsCollection)).then(snapshot => {
+      if (!cancelled) setActiveForms(snapshot.docs.map(item => normalizeRegistrationForm(item.id, item.data())).filter(form => form.status === 'active'));
+    }).catch(() => { if (!cancelled) setActiveForms([]); });
+    return () => { cancelled = true; };
+  }, [page]);
+
+  const handleLandingButtonAction = (config: LandingButtonConfig, sourceSection: string) => {
+    if (!config.visible || config.actionType === 'none') return;
+    if (config.actionType === 'form') {
+      const selected = activeForms.find(form => form.id === config.formId);
+      if (!selected) {
+        setFormActionError(config.formId ? 'This form is currently inactive or unavailable.' : 'No form is assigned to this button.');
+        window.setTimeout(() => setFormActionError(''), 3500);
+        return;
+      }
+      setDynamicFormSource({ section: sourceSection, button: config.text });
+      setOpenDynamicForm(selected);
+      return;
+    }
+    if (config.actionType === 'section') {
+      document.getElementById(config.sectionId.replace(/^#/, ''))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    if (config.externalUrl === '/register') {
+      openRegistration();
+      return;
+    }
+    if (config.externalUrl) window.location.href = config.externalUrl;
+  };
 
   useEffect(() => {
     return onAuthStateChanged(auth, (user) => {
@@ -149,19 +182,15 @@ export default function App() {
     const authAvatar = getAvatarByUrl(currentUser.photoURL);
     setHeaderPhotoURL(authAvatar?.url || fallbackAvatar?.url || null);
 
-    const unsubscribe = onSnapshot(
-      doc(db, 'userProfiles', currentUser.uid),
-      snapshot => {
+    let cancelled = false;
+    void getDoc(doc(db, 'userProfiles', currentUser.uid)).then(snapshot => {
+      if (!cancelled) {
         const profile = snapshot.data() as { avatarId?: string; photoURL?: string } | undefined;
         const profileAvatar = getAvatarById(profile?.avatarId) || getAvatarByUrl(profile?.photoURL);
         setHeaderPhotoURL(profileAvatar?.url || authAvatar?.url || fallbackAvatar?.url || null);
-      },
-      () => {
-        setHeaderPhotoURL(authAvatar?.url || fallbackAvatar?.url || null);
-      },
-    );
-
-    return unsubscribe;
+      }
+    }).catch(() => { if (!cancelled) setHeaderPhotoURL(authAvatar?.url || fallbackAvatar?.url || null); });
+    return () => { cancelled = true; };
   }, [currentUser]);
 
   useEffect(() => {
@@ -262,16 +291,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = onSnapshot(
-      doc(db, landingContentCollection, landingContentDocId),
-      snapshot => {
-        setLandingContent(snapshot.exists() ? normalizeLandingContent(snapshot.data() as LandingEditorContent) : defaultLandingContent);
-      },
-      () => setLandingContent(defaultLandingContent),
-    );
-
-    return unsubscribe;
-  }, []);
+    if (page !== 'home') return;
+    let cancelled = false;
+    void getDoc(doc(db, landingContentCollection, landingContentDocId)).then(snapshot => {
+      if (!cancelled) setLandingContent(snapshot.exists() ? normalizeLandingContent(snapshot.data() as LandingEditorContent) : defaultLandingContent);
+    }).catch(() => { if (!cancelled) setLandingContent(defaultLandingContent); });
+    return () => { cancelled = true; };
+  }, [page]);
 
   useEffect(() => {
     return () => {
@@ -286,6 +312,12 @@ export default function App() {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }, [page]);
 
   useEffect(() => {
     if (currentUser && openRegistrationAfterAuth) {
@@ -359,9 +391,9 @@ export default function App() {
   }, [currentUser, isAdmin, isJudge]);
 
   const navigateTo = (nextPage: Page) => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
     setPage(nextPage);
     window.history.pushState({}, '', pathForPage(nextPage));
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const playHandoffLoader = (label = 'Opening team dashboard') => {
@@ -453,9 +485,13 @@ export default function App() {
     const normalizedTeamName = normalizeTeamName(registration.teamName);
     const teamDocId = teamNameDocId(registration.teamName);
     const registrationId = createRegistrationId();
+    const ticketId = createTicketId();
     const registrationWithId = {
       ...registration,
+      teamId: teamDocId,
       registrationId,
+      ticketId,
+      ticketVersion: EVENT_TICKET_VERSION,
       teamNameKey: normalizedTeamName,
       leaderEmail: registration.leaderEmail || currentUser.email || '',
     };
@@ -587,8 +623,10 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {formActionError && <div className="fixed left-1/2 top-24 z-[90] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-xl border-2 border-amber-400 bg-amber-50 px-4 py-3 text-center text-sm font-bold text-amber-900 shadow-lg">{formActionError}</div>}
+
       {/* Primary headers */}
-      {!(isProfileOpen || page === 'profile') && (
+      {!(isProfileOpen || page === 'profile' || page === 'landingediter' || page === 'admin') && (
         <Navbar
           onRegisterClick={openRegistration}
           onAdminClick={() => navigateTo('admin')}
@@ -605,6 +643,8 @@ export default function App() {
           userPhotoURL={headerPhotoURL}
           onAuthClick={() => openAuth('signin')}
           onProfileClick={() => isVolunteer && !isAdmin && !isJudge ? navigateTo('volunteer') : openProfile()}
+          content={landingContent.header}
+          onButtonAction={handleLandingButtonAction}
         />
       )}
 
@@ -656,6 +696,15 @@ export default function App() {
           isAdmin={isAdmin}
           onBack={() => navigateTo('home')}
           onLogin={() => openAuth('signin', false)}
+          onOpenLandingEditor={() => navigateTo('landingediter')}
+        />
+      ) : page === 'landingediter' ? (
+        <AdminLandingEditorPage
+          user={currentUser}
+          isAdmin={isAdmin}
+          onBackToAdmin={() => navigateTo('admin')}
+          onBackToEvent={() => navigateTo('home')}
+          onLogin={() => openAuth('signin', false)}
         />
       ) : page === 'dashboard' ? (
         <TeamDashboard
@@ -702,47 +751,15 @@ export default function App() {
       ) : (
       <main>
         {/* Hero Banner Section */}
-        <Hero onRegisterClick={openRegistration} />
+        <Hero onRegisterClick={openRegistration} content={landingContent.hero} onButtonAction={handleLandingButtonAction} />
 
-        <DynamicLandingSections content={landingContent} />
+        <DynamicLandingSections content={landingContent} onButtonAction={handleLandingButtonAction} />
 
-        {/* Dynamic Video Showcase Section */}
-        <ProductVideos />
-
-        {/* Black and white image quote gallery */}
-        <ImageQuotes />
-
-        {/* Gray Global Sponsor Strip Section */}
-        <Sponsors />
-
-        {/* Why Join Highlight System Section */}
-        <Highlights />
-
-        {/* Interactive Tracks Accordion Section */}
-        <Tracks />
-
-        {/* Dynamic Schedule Calendar Tabs Section */}
-        <Schedule />
-
-        {/* Rewards grid Block Section */}
-        <Prizes />
-
-        {/* Expert advisers bios System Section */}
-        <Mentors />
-
-        {/* Quotes Testimonials Grid Section */}
-        <Testimonials />
-
-        {/* FAQ System Block Section */}
-        <FAQ />
-
-        {/* Visual Call To Action Section */}
-        <CTA onRegisterClick={openRegistration} />
       </main>
       )}
 
       {/* Global standard Footer */}
-      {!(page === 'volunteer' && isVolunteer && !isAdmin && !isJudge) && <Footer />}
+      {page === 'home' && <Footer content={landingContent.footer} />}
 
       <AuthModal
         isOpen={isAuthModalOpen}
@@ -753,6 +770,8 @@ export default function App() {
           setOpenDashboardAfterAuth(false);
         }}
       />
+
+      <DynamicFormModal form={openDynamicForm} sourceSection={dynamicFormSource.section} sourceButton={dynamicFormSource.button} onClose={() => setOpenDynamicForm(null)} />
 
       <ProfilePanel
         isOpen={isProfileOpen}

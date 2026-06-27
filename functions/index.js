@@ -1,6 +1,7 @@
 "use strict";
 
 const {onCall, HttpsError} = require("firebase-functions/v2/https");
+const {randomUUID} = require("crypto");
 const {initializeApp} = require("firebase-admin/app");
 const {getAuth} = require("firebase-admin/auth");
 const {FieldValue, getFirestore} = require("firebase-admin/firestore");
@@ -34,6 +35,64 @@ const isAdminCaller = async (callerAuth) => {
   const adminSnapshot = await db.doc(`admins/${callerAuth.uid}`).get();
   return adminSnapshot.exists && adminSnapshot.get("active") !== false;
 };
+
+exports.ensureRegistrationTicket = onCall(
+  {region: process.env.FUNCTIONS_REGION || "us-central1"},
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Sign in to create your team ticket.");
+    }
+
+    const uid = request.auth.uid;
+    let result;
+    await db.runTransaction(async (transaction) => {
+      const accountRef = db.doc(`accountRegistrations/${uid}`);
+      const accountSnapshot = await transaction.get(accountRef);
+      if (!accountSnapshot.exists) {
+        throw new HttpsError("not-found", "No team registration is linked to this account.");
+      }
+
+      const account = accountSnapshot.data() || {};
+      const normalizedTeamName = String(account.teamName || "").trim().replace(/\s+/g, " ").toLowerCase();
+      if (!normalizedTeamName) {
+        throw new HttpsError("failed-precondition", "The linked team name is missing.");
+      }
+
+      const teamId = encodeURIComponent(normalizedTeamName);
+      const teamRef = db.doc(`registrations/${teamId}`);
+      const teamSnapshot = await transaction.get(teamRef);
+      if (!teamSnapshot.exists || teamSnapshot.get("userId") !== uid) {
+        throw new HttpsError("permission-denied", "This account does not own the linked team.");
+      }
+
+      const ticketId = String(teamSnapshot.get("ticketId") || randomUUID());
+      const ticketVersion = 1;
+      result = {
+        teamId,
+        ticketId,
+        ticketVersion,
+        registrationId: String(teamSnapshot.get("registrationId") || account.registrationId || ""),
+      };
+
+      transaction.set(teamRef, {
+        teamId,
+        ticketId,
+        ticketVersion,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, {merge: true});
+      transaction.set(accountRef, {
+        registrationSummary: {
+          ...(account.registrationSummary || {}),
+          teamId,
+          ticketId,
+          ticketVersion,
+        },
+      }, {merge: true});
+    });
+
+    return result;
+  },
+);
 
 exports.deleteAuthUser = onCall(
   {region: process.env.FUNCTIONS_REGION || "us-central1"},

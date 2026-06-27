@@ -2,13 +2,19 @@ import { useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowRight, Calendar, Check, ClipboardCheck, Lightbulb, MapPin, Play, Plus, Presentation, Rocket, Sparkles, Trophy, Users } from 'lucide-react';
 import { profileAvatars } from '../lib/profileAvatars';
-import festImage from '../../fest_image.png';
+import type { LandingButtonConfig, LandingHeroConfig } from '../lib/landingContent';
+import heroStudentsImage from '../../hero_students_cropped.png';
 
 interface HeroProps {
   onRegisterClick: () => void;
+  content?: LandingHeroConfig;
+  onButtonAction?: (config: LandingButtonConfig, sourceSection: string) => void;
 }
 
-export default function Hero({ onRegisterClick }: HeroProps) {
+export default function Hero({ onRegisterClick, content, onButtonAction }: HeroProps) {
+  if (content?.visible === false) return null;
+
+  const hero = content;
   const chips = ['All', 'Healthcare', 'Education', 'Software', 'Climate', 'Social'];
   const heroAvatars = profileAvatars.slice(0, 5);
   const eventPhases = [
@@ -88,56 +94,116 @@ export default function Hero({ onRegisterClick }: HeroProps) {
   const [selectedDomainId, setSelectedDomainId] = useState(domainFocus[2].id);
   const selectedPhase = eventPhases.find(phase => phase.id === selectedPhaseId) || eventPhases[1];
   const selectedDomain = domainFocus.find(domain => domain.id === selectedDomainId) || domainFocus[2];
+  const heroFocalX = hero?.media?.focalX ?? 50;
+  const heroFocalY = hero?.media?.focalY ?? 50;
+  const heroZoom = hero?.media?.zoom ?? 1;
+  const heroMediaStyle = hero?.media ? {
+    objectFit: hero.media.fit || 'cover',
+    objectPosition: `${heroFocalX}% ${heroFocalY}%`,
+    transform: `scale(${heroZoom}) rotate(${hero.media.rotate || 0}deg)`,
+    transformOrigin: `${heroFocalX}% ${heroFocalY}%`,
+  } : undefined;
+  const primaryStyleClass = hero?.primaryButtonConfig?.style === 'dark'
+    ? 'neo-btn-black'
+    : hero?.primaryButtonConfig?.style === 'outline'
+      ? 'rounded-xl border-3 border-[#191A23] bg-transparent font-black'
+      : 'neo-btn';
+  const secondaryStyleClass = hero?.secondaryButtonConfig?.style === 'primary'
+    ? 'neo-btn'
+    : hero?.secondaryButtonConfig?.style === 'outline'
+      ? 'rounded-xl border-3 border-[#191A23] bg-transparent font-black'
+      : 'neo-btn-black';
+
+  const handlePrimaryClick = () => {
+    if (hero?.primaryButtonConfig && onButtonAction) {
+      onButtonAction(hero.primaryButtonConfig, 'hero');
+      return;
+    }
+    if (!hero?.primaryButtonUrl || hero.primaryButtonUrl === '/register') {
+      onRegisterClick();
+      return;
+    }
+    window.location.href = hero.primaryButtonUrl;
+  };
+  const handleSecondaryClick = () => {
+    if (hero?.secondaryButtonConfig && onButtonAction) onButtonAction(hero.secondaryButtonConfig, 'hero');
+  };
 
   return (
-    <section className="relative overflow-hidden px-4 pb-14 pt-24 md:px-8 md:pb-20 md:pt-32">
+    <section
+      className="relative overflow-hidden px-4 pb-14 pt-24 md:px-8 md:pb-20 md:pt-32"
+      style={{ backgroundColor: hero?.backgroundColor || undefined, color: hero?.textColor || undefined }}
+    >
       <div className="mx-auto max-w-7xl space-y-8">
-        <div className="grid gap-8 lg:grid-cols-[1fr_1.3fr] lg:items-end">
+        <div className="grid gap-8 md:grid-cols-[1fr_1.1fr] md:items-start">
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.45 }}
-            className="space-y-5"
+            className={`space-y-5 ${hero?.alignment === 'center' ? 'text-center md:text-left' : ''}`}
           >
             <div className="inline-flex items-center gap-2 rounded-full border-2 border-[#191A23] bg-[#191A23] px-4 py-2 text-xs font-black text-white">
               <span className="h-2.5 w-2.5 rounded-full bg-[#B9FF66] shadow-[0_0_0_5px_rgba(185,237,200,0.18)]" />
-              Grand Finale • 15 July 2026
+              {hero?.badge || 'Grand Finale - 15 July 2026'}
             </div>
 
-            <h1 className="max-w-xl text-[clamp(3.45rem,15vw,5rem)] font-black leading-[0.93] tracking-tight text-[#191A23] sm:text-6xl md:text-7xl">
-              Shifa SDG Innovation
+            <h1 className={`max-w-xl text-[clamp(2.25rem,10vw,5rem)] font-black leading-[0.93] tracking-tight sm:text-6xl md:text-7xl ${hero?.alignment === 'center' ? 'mx-auto md:mx-0' : ''}`} style={{ color: hero?.textColor || '#191A23' }}>
+              {hero?.heading || 'Shifa SDG Innovation'}
             </h1>
 
-            <p className="max-w-xl text-sm font-bold leading-relaxed text-[#191A23]/72 sm:text-base">
-              A Kerala-wide student innovation platform for SDG-focused ideas, expert clinics, pitch refinement, and finale-ready project showcases.
+            {hero?.subheading && (
+              <p className={`max-w-xl text-xl font-black leading-tight ${hero.alignment === 'center' ? 'mx-auto md:mx-0' : ''}`} style={{ color: hero.textColor }}>
+                {hero.subheading}
+              </p>
+            )}
+
+            <p className={`max-w-xl text-sm font-bold leading-relaxed text-[#191A23]/72 sm:text-base ${hero?.alignment === 'center' ? 'mx-auto md:mx-0' : ''}`} style={{ color: hero?.textColor ? `${hero.textColor}B8` : undefined }}>
+              {hero?.description || 'A Kerala-wide student innovation platform for SDG-focused ideas, expert clinics, pitch refinement, and finale-ready project showcases.'}
             </p>
 
-            <div className="theme-hero-mobile-visual lg:hidden">
-              <img
-                src={festImage}
-                alt="Students representing the Shifa SDG innovation challenge"
-                className="theme-hero-mobile-image"
-              />
-            </div>
           </motion.div>
 
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.45, delay: 0.08 }}
-            className="grid grid-cols-3 gap-2 sm:gap-4"
+            className="flex flex-col items-center gap-6 w-full md:items-end"
           >
-            {[
-              { label: 'Teams expected', value: '250', icon: <Users className="h-5 w-5" /> },
-              { label: 'Expert clinics', value: '30+', icon: <Sparkles className="h-5 w-5" /> },
-              { label: 'Prize pool', value: '1.5L', icon: <Trophy className="h-5 w-5" /> },
-            ].map((item) => (
-              <div key={item.label} className="theme-stat-card theme-stat-card-hero">
-                <span className="theme-stat-icon">{item.icon}</span>
-                <p className="text-xs font-bold text-[#191A23]/60">{item.label}</p>
-                <p className="mt-1 text-3xl font-black tracking-tight text-[#191A23] sm:text-4xl">{item.value}</p>
-              </div>
-            ))}
+            <div className="theme-hero-mobile-visual w-full justify-center md:justify-end">
+              {hero?.media?.type === 'video' ? (
+                <video
+                  src={hero.media.url}
+                  poster={hero.media.posterUrl || hero.media.thumbnailUrl}
+                  className="theme-hero-mobile-image"
+                  style={heroMediaStyle}
+                  muted
+                  autoPlay
+                  loop
+                  playsInline
+                />
+              ) : (
+                <img
+                  src={hero?.media?.assetId === 'hero-main' ? heroStudentsImage : hero?.media?.url || hero?.imageUrl || heroStudentsImage}
+                  alt={hero?.media?.alt || 'Students representing the Shifa SDG innovation challenge'}
+                  className="theme-hero-mobile-image"
+                  style={heroMediaStyle}
+                />
+              )}
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 sm:gap-3 w-full">
+              {[
+                { label: 'Teams expected', value: '250', icon: <Users className="h-5 w-5" /> },
+                { label: 'Expert clinics', value: '30+', icon: <Sparkles className="h-5 w-5" /> },
+                { label: 'Prize pool', value: '1.5L', icon: <Trophy className="h-5 w-5" /> },
+              ].map((item) => (
+                <div key={item.label} className="theme-stat-card theme-stat-card-hero">
+                  <span className="theme-stat-icon">{item.icon}</span>
+                  <p className="text-xs font-bold text-[#191A23]/60 leading-tight">{item.label}</p>
+                  <p className="mt-1 text-2xl sm:text-3xl font-black tracking-tight text-[#191A23]">{item.value}</p>
+                </div>
+              ))}
+            </div>
           </motion.div>
         </div>
 
@@ -156,7 +222,7 @@ export default function Hero({ onRegisterClick }: HeroProps) {
               {chip}
             </a>
           ))}
-          <button type="button" onClick={onRegisterClick} className="theme-circle-action" aria-label="Register">
+          <button type="button" onClick={handlePrimaryClick} className="theme-circle-action" aria-label="Register">
             <Plus className="h-5 w-5" />
           </button>
         </motion.div>
@@ -187,7 +253,7 @@ export default function Hero({ onRegisterClick }: HeroProps) {
               </div>
             </div>
 
-            <div className="mt-6 grid gap-4 lg:grid-cols-[1.05fr_1fr_1.1fr]">
+            <div className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               <div className="theme-dark-module theme-control-module">
                 <p className="font-mono text-[10px] font-black uppercase tracking-widest text-white/58">Event journey</p>
                 <div className="theme-phase-list mt-4" role="tablist" aria-label="Event journey phases">
@@ -255,14 +321,14 @@ export default function Hero({ onRegisterClick }: HeroProps) {
                   <p><Check className="mr-1 inline h-3.5 w-3.5" /> Solution workflow and impact path</p>
                   <p><Check className="mr-1 inline h-3.5 w-3.5" /> Demo, prototype, or pitch link</p>
                 </div>
-                <div className="mt-4 flex gap-2">
-                  <button type="button" onClick={onRegisterClick} className="theme-module-btn">Register</button>
-                  <a href="#schedule" className="theme-module-btn theme-module-btn-dark">Stages</a>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {hero?.primaryButtonConfig?.visible !== false && <button type="button" onClick={handlePrimaryClick} className="theme-module-btn flex-1 min-w-0 text-center justify-center truncate">{hero?.primaryButtonText || 'Register Now'}</button>}
+                  <a href={hero?.secondaryButtonUrl || '#schedule'} className="theme-module-btn theme-module-btn-dark flex-1 min-w-0 text-center justify-center truncate">Stages</a>
                 </div>
               </div>
             </div>
 
-            <div className="mt-5 grid gap-4 sm:grid-cols-4">
+            <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
               {[
                 ['Tracks', '6'],
                 ['Team size', '3-5'],
@@ -310,30 +376,31 @@ export default function Hero({ onRegisterClick }: HeroProps) {
                 <a href="#schedule" className="inline-flex items-center gap-2 text-sm font-black">
                   View journey <ArrowRight className="h-4 w-4" />
                 </a>
-                <button type="button" onClick={onRegisterClick} className="text-sm font-black text-[#191A23]/70">
-                  Register
-                </button>
+                {hero?.primaryButtonConfig?.visible !== false && <button type="button" onClick={handlePrimaryClick} className="text-sm font-black text-[#191A23]/70">
+                  {hero?.primaryButtonText || 'Register'}
+                </button>}
               </div>
             </div>
           </motion.aside>
         </div>
 
         <div className="flex flex-col gap-3 sm:flex-row">
-          <button
+          {hero?.primaryButtonConfig?.visible !== false && <button
             id="hero-register-btn"
             type="button"
-            onClick={onRegisterClick}
-            className="neo-btn px-8 py-4 text-center text-sm md:text-base flex items-center justify-center gap-2 cursor-pointer"
+            onClick={handlePrimaryClick}
+            className={`${primaryStyleClass} w-full sm:w-auto px-8 py-4 text-center text-sm md:text-base flex items-center justify-center gap-2 cursor-pointer`}
           >
-            Register Now <Sparkles className="w-4.5 h-4.5 fill-black/10" />
-          </button>
-          <a
+            {hero?.primaryButtonText || 'Register Now'} <Sparkles className="w-4.5 h-4.5 fill-black/10" />
+          </button>}
+          {hero?.secondaryButtonConfig?.visible !== false && <a
             id="hero-schedule-link"
-            href="#schedule"
-            className="neo-btn-black px-8 py-4 text-center text-sm md:text-base flex items-center justify-center gap-2 cursor-pointer"
+            href={hero?.secondaryButtonUrl || '#schedule'}
+            onClick={event => { if (hero?.secondaryButtonConfig && onButtonAction) { event.preventDefault(); handleSecondaryClick(); } }}
+            className={`${secondaryStyleClass} w-full sm:w-auto px-8 py-4 text-center text-sm md:text-base flex items-center justify-center gap-2 cursor-pointer`}
           >
-            View Programme Stages <Play className="w-4 h-4 fill-[#B9FF66] text-[#B9FF66]" />
-          </a>
+            {hero?.secondaryButtonText || 'View Programme Stages'} <Play className="w-4 h-4 fill-[#B9FF66] text-[#B9FF66]" />
+          </a>}
         </div>
       </div>
     </section>

@@ -26,6 +26,7 @@ export default function RegistrationPassCard({
   const rawTrackText = registration.track || registration.fieldOfStudy || '';
   const trackText = rawTrackText && !/^not selected$/i.test(rawTrackText.trim()) ? rawTrackText : '';
   const memberLabel = `${String(registration.teamSize || 0).padStart(2, '0')} ${registration.teamSize === 1 ? 'member' : 'members'}`;
+  const ticketLabel = registration.ticketId ? 'Verified team ticket' : 'Legacy team pass';
   const nameLength = leaderName.length;
   const nameSize = nameLength > 40
     ? 'clamp(1.7rem, 3vw, 2.25rem)'
@@ -106,7 +107,7 @@ export default function RegistrationPassCard({
 
         <aside className="relative flex min-h-[300px] flex-col items-center justify-end overflow-hidden bg-[#B9EDC8] p-5 text-center sm:min-h-[420px] sm:p-8">
           <div className="absolute inset-x-5 top-5 rounded-full bg-white/62 px-4 py-2 text-xs font-black uppercase text-[#3D6149] sm:inset-x-8 sm:top-8">
-            Verified entry
+            {ticketLabel}
           </div>
           <div className="absolute bottom-16 h-44 w-44 rounded-full bg-[#CDB0E7]/55 blur-2xl sm:bottom-24 sm:h-56 sm:w-56" />
           <div className="relative">
@@ -123,7 +124,7 @@ export default function RegistrationPassCard({
             </div>
           </div>
           <p className="relative mt-6 max-w-[220px] text-sm font-bold leading-relaxed text-[#191A23]/65">
-            Present the QR during event check-in.
+            Present this team QR at an authorized event checkpoint.
           </p>
         </aside>
       </div>
