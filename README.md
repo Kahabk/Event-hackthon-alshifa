@@ -37,6 +37,8 @@ Shifa SDG is built as a responsive React and Firebase web application for innova
 - QRCode generation
 - Google GenAI SDK included for future AI features
 
+## Demo
+https://event-hackthon-alshifa.vercel.app/
 ## Project Structure
 
 ```text
